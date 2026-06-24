@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from app.database import db, serialize_object_id
@@ -649,15 +649,53 @@ def registrar_review(application_id: str, payload: RegistrarReviewInput, user: d
     return serialize_object_id(updated)
 
 
-@router.post("/{application_id}/documents")
-def upload_document(application_id: str, payload: DocumentUploadInput, user: dict = Depends(get_current_user)):
+@router.get("/{application_id}/documents")
+def list_application_documents(application_id: str, user: dict = Depends(get_current_user)):
     try:
         application = get_application(application_id)
     except WorkflowError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     ensure_application_access(application, user)
 
+    documents = list(
+        db.application_documents.find({"application_id": str(application["_id"])}).sort("created_at", -1)
+    )
+    if not documents:
+        documents = application.get("documents", []) or application.get("required_documents", [])
+    return serialize_object_id({"items": documents, "count": len(documents)})
+
+
+@router.post("/{application_id}/documents")
+async def upload_document(application_id: str, request: Request, user: dict = Depends(get_current_user)):
+    try:
+        application = get_application(application_id)
+    except WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ensure_application_access(application, user)
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file")
+        document_type = str(form.get("document_type") or "")
+        if not document_type:
+            raise HTTPException(status_code=422, detail="document_type is required")
+        file_name = getattr(upload, "filename", None) or str(form.get("file_name") or "document.pdf")
+        payload = DocumentUploadInput(
+            document_type=document_type,
+            file_name=file_name,
+            file_url=f"/local-upload/{file_name}",
+            status=str(form.get("status") or "pending_review"),
+            uploaded_by={"role": user["role"], "id": user["linked_id"]},
+        )
+        file_size = form.get("file_size")
+    else:
+        payload = DocumentUploadInput(**(await request.json()))
+        file_size = None
+
     document = payload.model_dump()
+    if file_size:
+        document["file_size"] = str(file_size)
     document["application_id"] = str(application["_id"])
     document["uploaded_at"] = now()
     document["reviewed_by"] = None
@@ -688,6 +726,20 @@ def upload_document(application_id: str, payload: DocumentUploadInput, user: dic
     log_action(application, "document_uploaded", actor=payload.uploaded_by, metadata={"document_type": payload.document_type})
     create_notification(application, f"Document uploaded: {payload.document_type}")
     return serialize_object_id(document)
+
+
+@router.get("/{application_id}/objections")
+def list_application_objections(application_id: str, user: dict = Depends(get_current_user)):
+    try:
+        application = get_application(application_id)
+    except WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ensure_application_access(application, user)
+
+    objections = list(
+        db.objections.find({"application_id": str(application["_id"])}).sort("created_at", -1)
+    )
+    return serialize_object_id({"items": objections, "count": len(objections)})
 
 
 @router.post("/{application_id}/objections")
@@ -740,6 +792,18 @@ def application_timeline(application_id: str, user: dict = Depends(get_current_u
     }
     log_action(application, "timeline_viewed", actor={"role": user["role"], "id": user["linked_id"]})
     return serialize_object_id(timeline)
+
+
+@router.get("/{application_id}/comments")
+def list_application_comments(application_id: str, user: dict = Depends(get_current_user)):
+    try:
+        application = get_application(application_id)
+    except WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ensure_application_access(application, user)
+
+    comments = application.get("comments", [])
+    return serialize_object_id({"items": comments, "count": len(comments)})
 
 
 @router.post("/{application_id}/comments")

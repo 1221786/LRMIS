@@ -114,7 +114,11 @@ function App() {
           <Route path="/student2/profile" element={<Student2ProfilePage />} />
           <Route path="/student2/applications" element={<Student2ApplicationsPage />} />
           <Route path="/student2/applications/new" element={<Student2NewApplicationPage />} />
-          <Route path="/student2/applications/:id" element={<Student2ApplicationDetailsPage />} />
+          <Route path="/student2/applications/:id" element={<Student2TrackPage tab="overview" />} />
+          <Route path="/student2/applications/:id/timeline" element={<Student2TrackPage tab="timeline" />} />
+          <Route path="/student2/applications/:id/documents" element={<Student2TrackPage tab="documents" />} />
+          <Route path="/student2/applications/:id/comments" element={<Student2TrackPage tab="comments" />} />
+          <Route path="/student2/applications/:id/objections" element={<Student2TrackPage tab="objections" />} />
           <Route path="/student2/track/:id" element={<Student2TrackPage />} />
           <Route path="/student2/documents" element={<Student2DocumentsPage />} />
           <Route path="/student2/comments" element={<Student2CommentsPage />} />
@@ -174,7 +178,7 @@ function LoginPage() {
       const data = await login(username, password);
       saveSession(data);
       if (data.role === "applicant") navigate("/student2/dashboard");
-      else if (data.role === "staff") navigate("/student2/staff");
+      else if (data.role === "staff" || data.role === "registrar") navigate("/student1");
       else if (data.role === "surveyor") navigate("/student3/dashboard");
       else navigate("/dashboard");
     } catch (err) {

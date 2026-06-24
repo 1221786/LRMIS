@@ -1,3 +1,5 @@
+import re
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -54,6 +56,31 @@ class ApplicantUpdate(BaseModel):
     preferred_language: str | None = None
     notification_preferences: dict | None = None
     privacy_settings: dict | None = None
+    preferences: dict | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self):
+        if self.full_name is not None and len(self.full_name.strip()) < 2:
+            raise ValueError("full_name is required")
+        if self.contacts:
+            email = self.contacts.get("email")
+            phone = self.contacts.get("phone")
+            if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(email)):
+                raise ValueError("email format is invalid")
+            if phone and not re.match(r"^[0-9+\-\s()]{7,20}$", str(phone)):
+                raise ValueError("phone format is invalid")
+        applicant_type = self.applicant_type or self.type
+        if applicant_type and applicant_type not in {"citizen", "lawyer", "company", "surveyor", "authorized_representative"}:
+            raise ValueError("applicant_type is invalid")
+        if self.verification_state and self.verification_state not in {"unverified", "verified", "suspended"}:
+            raise ValueError("verification_state is invalid")
+        if self.preferred_language and self.preferred_language not in {"ar", "en", "Arabic", "English"}:
+            raise ValueError("preferred_language must be ar or en")
+        if self.notification_preferences:
+            for key, value in self.notification_preferences.items():
+                if not isinstance(value, bool):
+                    raise ValueError(f"notification_preferences.{key} must be true or false")
+        return self
 
 
 def applicant_query(applicant_id: str) -> dict:
@@ -80,6 +107,27 @@ def create_notification(recipient_id: str, subject: str, message: str) -> None:
             "created_at": now(),
         }
     )
+
+
+def mask_email(value: str | None) -> str | None:
+    if not value or "@" not in value:
+        return value
+    name, domain = value.split("@", 1)
+    return f"{name[:1]}***@{domain}"
+
+
+def mask_phone(value: str | None) -> str | None:
+    if not value:
+        return value
+    if len(value) <= 6:
+        return "***"
+    return f"{value[:4]}***{value[-3:]}"
+
+
+def mask_identifier(value: str | None) -> str | None:
+    if not value:
+        return value
+    return f"{'*' * max(len(value) - 3, 3)}{value[-3:]}"
 
 
 @router.post("/")
@@ -116,9 +164,16 @@ def get_applicant(applicant_id: str, user: dict = Depends(get_current_user)):
     applicant = db.applicants.find_one(applicant_query(applicant_id))
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
-    if user["role"] == "applicant":
-        applicant.pop("privacy_settings", None)
-        applicant.pop("internal_notes", None)
+    applicant.pop("internal_notes", None)
+    privacy = applicant.get("privacy_settings") or {}
+    if user["role"] != "applicant":
+        if privacy.get("mask_national_id", True):
+            applicant["national_id"] = mask_identifier(applicant.get("national_id"))
+            applicant.setdefault("identity", {})["national_id"] = mask_identifier(applicant.get("identity", {}).get("national_id"))
+        if privacy.get("hide_phone_from_staff"):
+            applicant.setdefault("contacts", {})["phone"] = mask_phone(applicant.get("contacts", {}).get("phone"))
+        if privacy.get("mask_email"):
+            applicant.setdefault("contacts", {})["email"] = mask_email(applicant.get("contacts", {}).get("email"))
     return serialize_object_id(applicant)
 
 
@@ -130,6 +185,11 @@ def update_applicant(applicant_id: str, payload: ApplicantUpdate, user: dict = D
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
     update = {key: value for key, value in payload.model_dump().items() if value is not None}
+    if user["role"] == "applicant":
+        forbidden = {"national_id", "registration_number", "applicant_type", "type", "verification_state"}
+        blocked = sorted(forbidden.intersection(update.keys()))
+        if blocked:
+            raise HTTPException(status_code=403, detail=f"Restricted fields cannot be edited by applicant: {', '.join(blocked)}")
     if "applicant_type" in update:
         update["type"] = update["applicant_type"]
     if "verification_state" in update:
@@ -142,8 +202,19 @@ def update_applicant(applicant_id: str, payload: ApplicantUpdate, user: dict = D
             identity["registration_number"] = update["registration_number"]
         update["identity"] = identity
     if update:
+        changed_fields = sorted(update.keys())
         update["updated_at"] = now()
         db.applicants.update_one({"_id": applicant["_id"]}, {"$set": update})
+        db.performance_logs.insert_one(
+            {
+                "event_type": "profile_updated",
+                "applicant_id": str(applicant["_id"]),
+                "changed_fields": changed_fields,
+                "actor": {"role": user["role"], "id": user.get("linked_id")},
+                "created_at": now(),
+            }
+        )
+        create_notification(str(applicant["_id"]), "Profile updated", "Your applicant profile was updated successfully.")
     return serialize_object_id(db.applicants.find_one({"_id": applicant["_id"]}))
 
 
@@ -155,12 +226,22 @@ def get_applicant_applications(applicant_id: str, user: dict = Depends(get_curre
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
 
+    linked_object_ids = []
+    linked_string_ids = []
+    for value in applicant.get("linked_applications", []):
+        linked_string_ids.append(str(value))
+        if ObjectId.is_valid(str(value)):
+            linked_object_ids.append(ObjectId(str(value)))
     applications = list(
         db.land_applications.find(
             {
                 "$or": [
                     {"applicant_ref.applicant_id": str(applicant["_id"])},
                     {"applicant_ref.applicant_id": applicant["_id"]},
+                    {"applicant_ref.national_id": applicant.get("national_id")},
+                    {"applicant_ref.identity.national_id": applicant.get("national_id")},
+                    {"_id": {"$in": linked_object_ids}},
+                    {"application_id": {"$in": linked_string_ids}},
                 ]
             }
         ).sort("created_at", -1)

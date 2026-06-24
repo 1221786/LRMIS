@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.database import db, serialize_object_id
 from app.services.auth import hash_password
@@ -129,6 +129,88 @@ def seed_sample_data() -> dict:
     }
     db.land_applications.update_one({"application_id": application["application_id"]}, {"$set": application}, upsert=True)
     application_doc = db.land_applications.find_one({"application_id": application["application_id"]})
+
+    student2_samples = [
+        ("LRMIS-2025-0001", "ownership_transfer", "145/12", "12", "3", "ZONE-RM-01", "pre_checked", 0),
+        ("LRMIS-2025-0002", "first_registration", "146/7", "7", "4", "ZONE-RM-01", "submitted", 1),
+        ("LRMIS-2025-0003", "parcel_subdivision", "147/3-4", "3", "4", "ZONE-RM-02", "survey_required", 32),
+        ("LRMIS-2025-0004", "parcel_merge", "148/2-3", "2", "3", "ZONE-RM-02", "surveyed", 2),
+        ("LRMIS-2025-0005", "boundary_correction", "149/1", "1", "1", "ZONE-RM-03", "legal_review", 3),
+    ]
+    linked_ids = [str(application_doc["_id"])]
+    for index, (application_id, app_type, parcel_number, block_number, basin_number, zone_id, status, days_ago) in enumerate(student2_samples, start=1):
+        sample_parcel = {
+            "parcel_code": f"{zone_id}-B{block_number}-BA{basin_number}-P{parcel_number.replace('/', '-')}",
+            "parcel_number": parcel_number,
+            "block_number": block_number,
+            "basin_number": basin_number,
+            "zone_id": zone_id,
+            "current_owner_refs": [str(applicant_doc["_id"])],
+            "area_sqm": 550 + (index * 30),
+            "land_use": "residential",
+            "registration_status": "registered",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[35.20 + index / 1000, 31.90], [35.201 + index / 1000, 31.90], [35.201 + index / 1000, 31.901], [35.20 + index / 1000, 31.901], [35.20 + index / 1000, 31.90]]],
+            },
+            "dispute_state": "none",
+            "created_at": now(),
+        }
+        db.parcels.update_one(
+            {"parcel_number": sample_parcel["parcel_number"], "zone_id": sample_parcel["zone_id"]},
+            {"$setOnInsert": sample_parcel},
+            upsert=True,
+        )
+        sample_parcel_doc = db.parcels.find_one({"parcel_number": parcel_number, "zone_id": zone_id})
+        created_at = now() - timedelta(days=days_ago)
+        sample_application = {
+            "application_id": application_id,
+            "application_type": app_type,
+            "type": app_type,
+            "status": status,
+            "priority": "normal",
+            "description": f"Student 2 linked application sample {application_id}.",
+            "workflow": {"current_state": status, "allowed_next": []},
+            "parcel_ref": {
+                "parcel_id": str(sample_parcel_doc["_id"]),
+                "parcel_code": sample_parcel_doc["parcel_code"],
+                "parcel_number": sample_parcel_doc["parcel_number"],
+                "block_number": sample_parcel_doc["block_number"],
+                "basin_number": sample_parcel_doc["basin_number"],
+                "zone_id": sample_parcel_doc["zone_id"],
+            },
+            "applicant_ref": {
+                "applicant_id": str(applicant_doc["_id"]),
+                "full_name": applicant_doc["full_name"],
+                "national_id": applicant_doc["national_id"],
+                "contacts": applicant_doc["contacts"],
+                "address": applicant_doc["address"],
+            },
+            "required_documents": application["required_documents"],
+            "documents": application["documents"],
+            "assignment": {"assigned_surveyor": None, "assigned_registrar": str(registrar_doc["_id"])},
+            "objection": {"has_objection": False, "objection_ids": []},
+            "internal": {"notes": [], "visible_registrar_notes": []},
+            "timestamps": {"submitted_at": created_at, "updated_at": created_at},
+            "created_at": created_at,
+            "updated_at": created_at,
+        }
+        db.land_applications.update_one(
+            {"application_id": application_id},
+            {"$setOnInsert": sample_application},
+            upsert=True,
+        )
+        sample_doc = db.land_applications.find_one({"application_id": application_id})
+        linked_ids.append(str(sample_doc["_id"]))
+        db.performance_logs.update_one(
+            {"application_id": str(sample_doc["_id"])},
+            {"$setOnInsert": {"application_id": str(sample_doc["_id"]), "event_stream": [{"type": "application_submitted", "at": created_at, "by": {"role": "applicant", "id": str(applicant_doc["_id"])}}]}},
+            upsert=True,
+        )
+    db.applicants.update_one(
+        {"_id": applicant_doc["_id"]},
+        {"$addToSet": {"linked_applications": {"$each": linked_ids}}, "$set": {"updated_at": now()}},
+    )
 
     survey_task = {
         "task_id": "SURV-2026-0001",
