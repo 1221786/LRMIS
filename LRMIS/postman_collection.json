@@ -1,0 +1,61 @@
+{
+  "info": {
+    "name": "LRMIS API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "http://127.0.0.1:8004/"
+      }
+    },
+    {
+      "name": "Seed Database",
+      "request": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8004/seed"
+      }
+    },
+    {
+      "name": "List Applications",
+      "request": {
+        "method": "GET",
+        "url": "http://127.0.0.1:8004/applications"
+      }
+    },
+    {
+      "name": "Create Application",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "Idempotency-Key", "value": "demo-key-001"}
+        ],
+        "url": "http://127.0.0.1:8004/applications/",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"application_type\":\"ownership_transfer\",\"applicant\":{\"full_name\":\"Nour Ahmad\",\"applicant_type\":\"citizen\",\"national_id\":\"400000002\",\"phone\":\"+970599000002\",\"email\":\"nour2@example.com\"},\"parcel\":{\"parcel_number\":\"147\",\"block_number\":\"12\",\"basin_number\":\"3\",\"zone_id\":\"ZONE-RM-01\",\"area_sqm\":850.5,\"geometry\":{\"type\":\"Polygon\",\"coordinates\":[[[35.204,31.902],[35.205,31.902],[35.205,31.903],[35.204,31.903],[35.204,31.902]]]}},\"documents\":[{\"document_type\":\"ownership_deed\",\"file_name\":\"deed.pdf\",\"file_url\":\"/uploads/deed.pdf\",\"status\":\"pending_review\"}]}"
+        }
+      }
+    },
+    {
+      "name": "Transition Application",
+      "request": {
+        "method": "PATCH",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": "http://127.0.0.1:8004/applications/LRMIS-2026-0001/transition",
+        "body": {"mode": "raw", "raw": "{\"new_status\":\"pre_checked\",\"note\":\"Pre-check completed\"}"}
+      }
+    },
+    {
+      "name": "Analytics KPIs",
+      "request": {
+        "method": "GET",
+        "url": "http://127.0.0.1:8004/analytics/kpis"
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,26 @@
+@app.post("/applications")
+def create_application(data: dict):
+
+    application = {
+        "application_id": str(uuid.uuid4()),
+        "type": data.get("type", "land_registration"),
+        "status": "submitted",
+
+        "applicant": {
+            "name": data.get("applicant", {}).get("name", "Unknown"),
+            "national_id": data.get("applicant", {}).get("national_id", ""),
+            "phone": data.get("applicant", {}).get("phone", "")
+        },
+
+        "parcel": data.get("parcel", {}),
+
+        "location": data.get("location", {}),
+
+        "timeline": [{
+            "status": "submitted"
+        }]
+    }
+
+    collection.insert_one(application)
+
+    return application
