@@ -107,7 +107,7 @@ function App() {
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="/applicant" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/student1" element={<Student1Dashboard />} />
+        <Route path="/student1/*" element={<Student1Dashboard />} />
         <Route element={<RequireAuth><Student2App /></RequireAuth>}>
           <Route path="/student2" element={<Navigate to="/student2/dashboard" replace />} />
           <Route path="/student2/dashboard" element={<Student2Dashboard />} />
@@ -178,7 +178,7 @@ function LoginPage() {
       const data = await login(username, password);
       saveSession(data);
       if (data.role === "applicant") navigate("/student2/dashboard");
-      else if (data.role === "staff" || data.role === "registrar") navigate("/student1");
+      else if (data.role === "staff" || data.role === "registrar") navigate("/student1/applicant-dashboard");
       else if (data.role === "surveyor") navigate("/student3/dashboard");
       else navigate("/dashboard");
     } catch (err) {
