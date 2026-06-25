@@ -38,7 +38,7 @@ function badgeTone(status) {
   return "info";
 }
 
-export default function Student2App() {
+function LegacyStudent2App() {
   return (
     <div className="s2-shell">
       <aside className="s2-sidebar">
@@ -76,7 +76,73 @@ export default function Student2App() {
   );
 }
 
+export default function Student2App() {
+  const session = userSession();
+  const isStaff = session.role === "staff" || session.role === "registrar";
+  const navigate = useNavigate();
+  const logout = () => {
+    localStorage.clear();
+    navigate("/login");
+  };
+
+  const staffNav = [
+    ["Dashboard", "/student2/dashboard", "⌂"],
+    ["Applications", "/student2/applications", "▤"],
+    ["Application Management", "/student2/staff", "▦"],
+    ["Registrar Review", "/student2/review", "✓"],
+    ["Documents", "/student2/documents", "▣"],
+    ["Objections", "/student2/objections", "!"],
+    ["Certificates", "/student2/certificates", "□"],
+    ["Reports", "/student2/settings", "◫"],
+    ["Users & Staff", "/student2/profile", "♙"],
+    ["Performance Logs", "/student2/notifications", "◷"],
+    ["Settings", "/student2/settings", "⚙"],
+  ];
+  const applicantNav = [
+    ["Dashboard", "/student2/dashboard", "⌂"],
+    ["My Profile", "/student2/profile", "♙"],
+    ["My Applications", "/student2/applications", "▤"],
+    ["New Application", "/student2/applications/new", "+"],
+    ["Upload Documents", "/student2/documents", "⇧"],
+    ["Comments", "/student2/comments", "✉"],
+    ["Objections", "/student2/objections", "!"],
+    ["Notifications", "/student2/notifications", "●"],
+    ["Settings", "/student2/settings", "⚙"],
+  ];
+
+  return (
+    <div className={`s2-shell ${isStaff ? "s2-staff-mode" : ""}`}>
+      <aside className="s2-sidebar">
+        <div className="s2-brand">
+          <div className="s2-logo">LR</div>
+          <div><strong>LRMIS</strong><span>{isStaff ? "Registrar Console" : "Applicant Portal"}</span></div>
+        </div>
+        <nav className="s2-nav">
+          {(isStaff ? staffNav : applicantNav).map(([label, path, icon]) => <NavLink key={label} to={path}><i>{icon}</i>{label}</NavLink>)}
+        </nav>
+        <button type="button" className="s2-logout-button" onClick={logout}>Logout</button>
+        <div className="s2-side-user"><div className="s2-face">{session.name.slice(0, 2).toUpperCase()}</div><div><strong>{session.name}</strong><span>{isStaff ? "Registrar" : "Applicant"}</span></div></div>
+      </aside>
+      <main className="s2-main">
+        <Topbar />
+        <section className="s2-page"><Outlet /></section>
+      </main>
+    </div>
+  );
+}
+
 function Topbar() {
+  const session = userSession();
+  const isStaff = session.role === "staff" || session.role === "registrar";
+  return (
+    <header className="s2-topbar">
+      <div><h1>{isStaff ? `Welcome back, ${session.name}` : "Student 2 - Applicant Portal"}</h1><p>{isStaff ? "Overview of land registration applications" : "Submit Applications • Track Status • Upload Documents • Communicate"}</p></div>
+      <div className="s2-user"><b>●</b><div className="s2-face">{session.name.slice(0, 2).toUpperCase()}</div><strong>{session.name}<small>{isStaff ? "Registrar" : session.role}</small></strong></div>
+    </header>
+  );
+}
+
+function LegacyTopbar() {
   const session = userSession();
   return (
     <header className="s2-topbar">
@@ -118,6 +184,10 @@ export function Student2Dashboard() {
     completed: apps.filter((app) => ["approved", "certificate_issued", "closed"].includes(app.status)).length,
   };
 
+  if (session.role === "staff" || session.role === "registrar") {
+    return <Student2StaffDashboard apps={apps} loading={loading} error={error} />;
+  }
+
   return (
     <div className="s2-applicant-home">
       <header className="s2-welcome">
@@ -136,6 +206,56 @@ export function Student2Dashboard() {
         {loading && <div className="s2-empty-state">Loading applications...</div>}
         {!loading && !apps.length && <div className="s2-empty-state"><strong>No applications yet</strong><span>Start by creating a new land registration application.</span><Link to="/student2/applications/new">+ New Application</Link></div>}
         {!loading && apps.length > 0 && <RecentApplicationsTable apps={apps.slice(0, 6)} />}
+      </section>
+    </div>
+  );
+}
+
+function Student2StaffDashboard({ apps, loading, error }) {
+  const count = (status) => apps.filter((app) => app.status === status).length;
+  const statusData = [
+    ["Submitted", count("submitted"), "#3478ef"],
+    ["Pre-Checked", count("pre_checked"), "#7c4ee4"],
+    ["Survey Required", count("survey_required"), "#f0a31a"],
+    ["Surveyed", count("surveyed"), "#12b981"],
+    ["Legal Review", count("legal_review"), "#9b5de5"],
+    ["Approved", count("approved"), "#19a96b"],
+    ["Rejected", count("rejected"), "#ef476f"],
+  ];
+  const total = Math.max(1, apps.length);
+  let cursor = 0;
+  const slices = statusData.map(([, value, color]) => {
+    const start = cursor;
+    cursor += (value / total) * 360;
+    return `${color} ${start}deg ${cursor}deg`;
+  }).join(", ");
+  const missing = apps.filter((app) => app.status === "missing_documents" || (app.required_documents || []).some((doc) => doc.status === "missing")).length;
+  const cards = [
+    ["Total Pending Applications", apps.filter((app) => !["approved", "certificate_issued", "closed", "rejected"].includes(app.status)).length, "blue", "/student2/applications"],
+    ["Applications By Status", apps.length, "orange", "/student2/applications"],
+    ["Requiring Legal Review", count("legal_review"), "green", "/student2/review"],
+    ["Missing Documents", missing, "red", "/student2/documents"],
+    ["Under Objection", count("under_objection"), "purple", "/student2/objections"],
+  ];
+
+  return (
+    <div className="s2-staff-dashboard">
+      {error && <div className="s2-error">{error}</div>}
+      <section className="s2-staff-stat-grid">
+        {cards.map(([label, value, tone, path]) => <article className={`s2-staff-stat ${tone}`} key={label}><span>{label.slice(0, 1)}</span><div><small>{label}</small><strong>{value}</strong><Link to={path}>View all</Link></div></article>)}
+      </section>
+      <section className="s2-staff-dashboard-grid">
+        <article className="s2-staff-panel">
+          <h2>Applications By Status</h2>
+          <div className="s2-status-chart-wrap">
+            <div className="s2-status-donut" style={{ background: `conic-gradient(${slices || "#e5e7eb 0deg 360deg"})` }}><div><strong>{apps.length}</strong><span>Total</span></div></div>
+            <div className="s2-status-legend">{statusData.map(([label, value, color]) => <p key={label}><i style={{ background: color }} /><span>{label}</span><b>{value}</b></p>)}</div>
+          </div>
+        </article>
+        <article className="s2-staff-panel">
+          <div className="s2-panel-title"><h2>Recent Applications</h2><Link to="/student2/applications">View all</Link></div>
+          {loading ? <div className="s2-empty-state">Loading applications...</div> : <table className="s2-staff-recent-table"><thead><tr><th>Application ID</th><th>Applicant</th><th>Type</th><th>Status</th><th>Submitted On</th></tr></thead><tbody>{apps.slice(0, 6).map((app) => <tr key={app.application_id}><td><Link to={`/student2/staff/applications/${app.application_id}`}>{app.application_id}</Link></td><td>{app.applicant_ref?.full_name || "-"}</td><td>{labelText(app.type)}</td><td><span className={`s2-mini-status ${workflowStatusTone(app.status)}`}>{workflowStatusLabel(app.status)}</span></td><td>{shortHumanDate(app.created_at)}</td></tr>)}</tbody></table>}
+        </article>
       </section>
     </div>
   );
@@ -501,6 +621,8 @@ export function Student2ApplicationDetailsPage() {
   const [objectionReason, setObjectionReason] = useState("Incorrect boundary");
   const [documentType, setDocumentType] = useState("ownership_deed");
   const [file, setFile] = useState(null);
+  const [targetStatus, setTargetStatus] = useState("");
+  const [rejectionReason, setRejectionReason] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const session = userSession();
@@ -510,6 +632,7 @@ export function Student2ApplicationDetailsPage() {
     setError("");
     const application = await api(`/applications/${id}`);
     setApp(application);
+    setTargetStatus(application.workflow?.allowed_next?.[0] || "");
     const log = await getTimeline(id).catch(() => ({ event_stream: [] }));
     setTimeline(log.event_stream || []);
   }
@@ -529,8 +652,8 @@ export function Student2ApplicationDetailsPage() {
   }
 
   async function addNote() {
-    await postJson(`/applications/${id}/notes`, { note, visible_to_applicant: true });
-    setMessage("Registrar note saved and visible to applicant.");
+    await postJson(`/applications/${id}/internal-notes`, { note, visible_to_applicant: false });
+    setMessage("Internal staff note saved.");
     await load();
   }
 
@@ -572,7 +695,11 @@ export function Student2ApplicationDetailsPage() {
   }
 
   async function reject() {
-    await postJson(`/applications/${id}/reject`, { reason: "Legal or administrative requirement was not satisfied." });
+    if (rejectionReason.trim().length < 3) {
+      setMessage("Rejection reason is required.");
+      return;
+    }
+    await postJson(`/applications/${id}/reject`, { reason: rejectionReason, rejected_by: session.linkedId });
     setMessage("Application rejected with reason.");
     await load();
   }
@@ -582,8 +709,29 @@ export function Student2ApplicationDetailsPage() {
   const documents = app.required_documents || app.attachments || app.documents || [];
   const comments = app.comments || [];
   const objections = app.objections || [];
-  const parcel = app.parcel_ref || app.parcel || {};
-  const applicant = app.applicant_ref || {};
+  const parcel = app.parcel || app.parcel_ref || {};
+  const applicant = app.applicant || app.applicant_ref || {};
+
+  if (isStaff) {
+    return <StaffApplicationDetails
+      app={app}
+      applicant={applicant}
+      parcel={parcel}
+      documents={documents}
+      note={note}
+      setNote={setNote}
+      targetStatus={targetStatus}
+      setTargetStatus={setTargetStatus}
+      rejectionReason={rejectionReason}
+      setRejectionReason={setRejectionReason}
+      message={message}
+      error={error}
+      transition={transition}
+      addNote={addNote}
+      requestMissing={requestMissing}
+      reject={reject}
+    />;
+  }
 
   return (
     <div className="s2-details-page">
@@ -678,6 +826,130 @@ export function Student2ApplicationDetailsPage() {
       }
     </div>
   );
+}
+
+function StaffParcelMap({ geometry }) {
+  const mapNode = useRef(null);
+  const mapInstance = useRef(null);
+
+  useEffect(() => {
+    if (!mapNode.current || mapInstance.current) return;
+    const map = L.map(mapNode.current, { zoomControl: true }).setView([31.9038, 35.2034], 15);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "OpenStreetMap" }).addTo(map);
+    mapInstance.current = map;
+    return () => {
+      map.remove();
+      mapInstance.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mapInstance.current || !geometry?.coordinates) return;
+    const layer = L.geoJSON({ type: "Feature", geometry, properties: {} }, {
+      style: { color: "#1769d3", weight: 3, fillColor: "#2581d9", fillOpacity: 0.42 },
+    }).addTo(mapInstance.current);
+    if (layer.getBounds().isValid()) mapInstance.current.fitBounds(layer.getBounds(), { padding: [18, 18] });
+    return () => layer.remove();
+  }, [geometry]);
+
+  return <div className="s2-staff-detail-map" ref={mapNode} />;
+}
+
+function StaffApplicationDetails({
+  app,
+  applicant,
+  parcel,
+  documents,
+  note,
+  setNote,
+  targetStatus,
+  setTargetStatus,
+  rejectionReason,
+  setRejectionReason,
+  message,
+  error,
+  transition,
+  addNote,
+  requestMissing,
+  reject,
+}) {
+  const [dialog, setDialog] = useState("");
+  const [missingTypes, setMissingTypes] = useState([]);
+  const internalNotes = app.internal?.notes || [];
+  const address = applicant.address || {};
+  const contacts = applicant.contacts || {};
+  return (
+    <div className="s2-staff-detail-page">
+      <header className="s2-staff-detail-header">
+        <Link to="/student2/staff">← Back to Applications</Link>
+        <div><span>Application ID: <b>{app.application_id}</b></span><span className={`s2-mini-status ${workflowStatusTone(app.status)}`}>{workflowStatusLabel(app.status)}</span></div>
+      </header>
+      {message && <div className="s2-success">{message}</div>}
+      {error && <div className="s2-error">{error}</div>}
+
+      <section className="s2-staff-detail-top">
+        <article className="s2-staff-detail-card">
+          <h2>Applicant Details</h2>
+          <dl><dt>Full Name</dt><dd>{applicant.full_name || app.applicant_ref?.full_name || "-"}</dd><dt>National ID</dt><dd>{applicant.national_id || applicant.identity?.national_id || "-"}</dd><dt>Email</dt><dd>{contacts.email || "-"}</dd><dt>Phone</dt><dd>{contacts.phone || "-"}</dd><dt>Applicant Type</dt><dd>{labelText(applicant.type || applicant.applicant_type || "citizen")}</dd><dt>Address</dt><dd>{[address.line1, address.street, address.city, address.zone_id].filter(Boolean).join(", ") || "-"}</dd></dl>
+        </article>
+        <article className="s2-staff-detail-card">
+          <h2>Parcel Details</h2>
+          <dl><dt>Parcel Number</dt><dd>{parcel.parcel_number || app.parcel_ref?.parcel_number || "-"}</dd><dt>Block Number</dt><dd>{parcel.block_number || app.parcel_ref?.block_number || "-"}</dd><dt>Basin Number</dt><dd>{parcel.basin_number || app.parcel_ref?.basin_number || "-"}</dd><dt>Zone</dt><dd>{parcel.zone_id || app.parcel_ref?.zone_id || "-"}</dd><dt>Area (m²)</dt><dd>{parcel.area_sqm || "-"}</dd><dt>Frontage (m)</dt><dd>{parcel.frontage_m || "-"}</dd><dt>Depth (m)</dt><dd>{parcel.depth_m || "-"}</dd></dl>
+        </article>
+        <article className="s2-staff-detail-card">
+          <h2>Parcel Location</h2>
+          <StaffParcelMap geometry={parcel.geometry} />
+          <Link className="s2-map-link" to={`/student2/staff/applications/${app.application_id}/map`}>View in Map ↗</Link>
+        </article>
+      </section>
+
+      <section className="s2-staff-detail-bottom">
+        <article className="s2-staff-detail-card">
+          <div className="s2-panel-title"><h2>Uploaded Documents ({documents.length})</h2><Link to={`/student2/staff/applications/${app.application_id}/documents`}>View All Documents</Link></div>
+          <table className="s2-staff-doc-table"><thead><tr><th>Document Type</th><th>File Name</th><th>Status</th><th>Uploaded On</th></tr></thead><tbody>{documents.map((doc, index) => <tr key={`${doc.document_type}-${index}`}><td>{labelText(doc.document_type)}</td><td>{doc.file_url ? <a href={doc.file_url} target="_blank" rel="noreferrer">{doc.file_name}</a> : doc.file_name || "Not uploaded"}</td><td><span className={`s2-badge ${badgeTone(doc.status)}`}>{doc.status}</span></td><td>{shortHumanDate(doc.uploaded_at)}</td></tr>)}</tbody></table>
+        </article>
+        <article className="s2-staff-detail-card">
+          <h2>Internal Notes</h2>
+          <div className="s2-internal-notes">{internalNotes.length ? internalNotes.slice(-3).map((item, index) => <div key={item._id || index}><p>{item.note || item.notes}</p><small>{item.created_by || item.reviewed_by || "Registrar"} • {formatDate(item.created_at || item.reviewed_at)}</small></div>) : <p>No internal notes yet.</p>}</div>
+          <button type="button" onClick={() => setDialog("note")}>Add Note</button>
+        </article>
+        <article className="s2-staff-detail-card s2-staff-actions">
+          <h2>Actions</h2>
+          <select value={targetStatus} onChange={(event) => setTargetStatus(event.target.value)}><option value="">Change Status</option>{(app.workflow?.allowed_next || []).map((state) => <option key={state}>{state}</option>)}</select>
+          <button type="button" disabled={!targetStatus} onClick={() => transition(targetStatus)}>Change Status</button>
+          <button type="button" className="warn" onClick={() => { setMissingTypes((documents || []).filter((doc) => doc.status === "missing").map((doc) => doc.document_type)); setDialog("missing"); }}>Request Missing Documents</button>
+          <button type="button" onClick={() => setDialog("note")}>Add Internal Note</button>
+          <button type="button" className="danger" onClick={() => setDialog("reject")}>Reject Application</button>
+          <button type="button" className="approve" onClick={() => transition("approved")}>Approve Application</button>
+        </article>
+      </section>
+      {dialog && <div className="s2-dialog-backdrop" onMouseDown={() => setDialog("")}><section className="s2-dialog" onMouseDown={(event) => event.stopPropagation()}>
+        {dialog === "missing" && <><h2>Request Missing Documents</h2><p>Select all documents the applicant must provide.</p><div className="s2-dialog-checks">{["ownership_deed", "sale_contract", "site_plan", "id_copy", "parcel_map"].map((type) => <label key={type}><input type="checkbox" checked={missingTypes.includes(type)} onChange={(event) => setMissingTypes((current) => event.target.checked ? [...new Set([...current, type])] : current.filter((item) => item !== type))} />{labelText(type)}</label>)}</div><div className="s2-dialog-actions"><button onClick={() => setDialog("")}>Cancel</button><button className="primary" onClick={async () => { await postJson(`/applications/${app.application_id}/request-missing-documents`, { document_types: missingTypes.length ? missingTypes : ["ownership_deed"], note: note || "Please upload the selected documents." }); setDialog(""); window.location.reload(); }}>Send Request</button></div></>}
+        {dialog === "note" && <><h2>Add Internal Note</h2><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Please verify boundary line..." /><div className="s2-dialog-actions"><button onClick={() => setDialog("")}>Cancel</button><button className="primary" onClick={async () => { await addNote(); setDialog(""); }}>Save Note</button></div></>}
+        {dialog === "reject" && <><h2>Reject Application</h2><label>Category<select><option>Legal</option><option>Administrative</option><option>Missing Data</option><option>Duplicate Application</option></select></label><label>Rejection Reason<textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Ownership documents invalid." /></label><div className="s2-dialog-actions"><button onClick={() => setDialog("")}>Cancel</button><button className="danger" onClick={async () => { await reject(); setDialog(""); }}>Reject</button></div></>}
+      </section></div>}
+    </div>
+  );
+}
+
+export function Student2StaffMapPage() {
+  const { id } = useParams();
+  const [app, setApp] = useState(null);
+  useEffect(() => { api(`/applications/${id}`).then(setApp).catch(() => setApp(null)); }, [id]);
+  const parcel = app?.parcel || app?.parcel_ref || {};
+  return <section className="s2-card s2-full s2-full-map-page"><div className="s2-panel-title"><h2>Parcel Location - {id}</h2><Link to={`/student2/staff/applications/${id}`}>Back to Application</Link></div>{app ? <><div className="s2-map-facts"><span><b>Parcel Number</b>{parcel.parcel_number}</span><span><b>Zone</b>{parcel.zone_id}</span><span><b>Area</b>{parcel.area_sqm || "-"} m²</span><span><b>Coordinates</b>{parcel.geometry?.coordinates?.[0]?.length || 0} boundary points</span></div><StaffParcelMap geometry={parcel.geometry} /></> : <div className="s2-empty-state">Loading parcel map...</div>}</section>;
+}
+
+export function Student2StaffDocumentsPage() {
+  const { id } = useParams();
+  const [documents, setDocuments] = useState([]);
+  useEffect(() => { getApplicationDocuments(id).then((data) => setDocuments(itemsOf(data))).catch(() => setDocuments([])); }, [id]);
+  function printDocument(url) {
+    if (!url) return;
+    const win = window.open(url, "_blank");
+    if (win) win.addEventListener("load", () => win.print(), { once: true });
+  }
+  return <section className="s2-card s2-full"><div className="s2-panel-title"><h2>All Documents - {id}</h2><Link to={`/student2/staff/applications/${id}`}>Back to Application</Link></div><table className="s2-table"><thead><tr><th>Document Type</th><th>File Name</th><th>Status</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>{documents.map((doc, index) => <tr key={doc._id || index}><td>{labelText(doc.document_type)}</td><td>{doc.file_name || "Not uploaded"}</td><td><span className={`s2-badge ${badgeTone(doc.status)}`}>{doc.status}</span></td><td>{shortHumanDate(doc.uploaded_at)}</td><td><div className="s2-document-page-actions">{doc.file_url ? <><a href={doc.file_url} target="_blank" rel="noreferrer">View</a><a href={doc.file_url} download={doc.file_name}>Download</a><button onClick={() => printDocument(doc.file_url)}>Print</button></> : <span>No file</span>}</div></td></tr>)}</tbody></table></section>;
 }
 
 function Filters({ filters = {}, setFilters }) {
@@ -1557,34 +1829,87 @@ export function Student2StaffConsolePage() {
 export function Student2ReviewPage() {
   const [apps, setApps] = useState([]);
   const [selected, setSelected] = useState("");
-  const [documentType, setDocumentType] = useState("ownership_deed");
-  const [decisionNote, setDecisionNote] = useState("Document is valid and complete.");
+  const [application, setApplication] = useState(null);
+  const [decisionNote, setDecisionNote] = useState("All ownership documents are valid. No legal issues found.");
+  const [attachment, setAttachment] = useState(null);
   const [message, setMessage] = useState("");
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
   useEffect(() => {
     getApplications({ limit: 20 }).then((data) => {
       const rows = itemsOf(data);
       setApps(rows);
-      setSelected(rows[0]?.application_id || "");
+      const legal = rows.find((app) => app.status === "legal_review") || rows[0];
+      setSelected(legal?.application_id || "");
     });
   }, []);
-  async function reviewDocument(decision) {
+  useEffect(() => {
+    if (selected) api(`/applications/${selected}`).then(setApplication).catch(() => setApplication(null));
+  }, [selected]);
+  async function loadSelected() {
+    if (selected) setApplication(await api(`/applications/${selected}`));
+  }
+  async function reviewDocument(documentType, decision) {
     try {
-      await patchJson(`/applications/${selected}/documents/review`, { document_type: documentType, decision, rejection_reason: decision === "rejected" ? decisionNote : null });
-      await patchJson(`/applications/${selected}/registrar-review`, { decision: decision === "verified" ? "approved" : "changes_requested", notes: decisionNote });
-      setMessage(`Document ${decision} and registrar review saved.`);
+      const reason = decision === "rejected" ? window.prompt("Enter document rejection reason:", "Document is invalid or unreadable.") : null;
+      if (decision === "rejected" && !reason) return;
+      await patchJson(`/applications/${selected}/documents/review`, { document_type: documentType, decision, rejection_reason: reason });
+      setMessage(`Document ${documentType} marked ${decision}.`);
+      await loadSelected();
     } catch (err) {
       setMessage(err.response?.data?.detail || "Review action could not be completed.");
     }
   }
   async function missingRequest() {
     try {
-      await postJson(`/applications/${selected}/request-missing-documents`, { document_types: [documentType], note: "Please upload the missing or corrected document." });
+      const missing = (application?.required_documents || []).filter((doc) => doc.status !== "verified").map((doc) => doc.document_type);
+      await postJson(`/applications/${selected}/request-missing-documents`, { document_types: missing.length ? missing : ["ownership_deed"], note: decisionNote || "Please upload the missing or corrected documents." });
       setMessage("Missing document request sent to applicant.");
+      await loadSelected();
     } catch (err) {
       setMessage(err.response?.data?.detail || "Missing document request could not be sent.");
     }
   }
-  return <div className="s2-staff-grid s2-fill"><section className="s2-card"><h2>Registrar Review</h2>{message && <div className="s2-success">{message}</div>}<label>Application<select value={selected} onChange={(event) => setSelected(event.target.value)}>{apps.map((app) => <option key={app.application_id}>{app.application_id}</option>)}</select></label><label>Document<select value={documentType} onChange={(event) => setDocumentType(event.target.value)}><option>ownership_deed</option><option>id_copy</option><option>sale_contract</option><option>parcel_map</option></select></label><label>Registrar Decision / Notes<textarea value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></label><button type="button" onClick={() => reviewDocument("verified")}>Accept</button><button type="button" className="danger" onClick={() => reviewDocument("rejected")}>Reject</button></section><section className="s2-card"><h2>Missing Documents</h2><DocumentList /><button type="button" onClick={missingRequest}>Send Request to Applicant</button></section><section className="s2-card"><h2>Objections</h2><Student2ObjectionsMini /></section></div>;
+  async function approve() {
+    try {
+      await patchJson(`/applications/${selected}/registrar-review`, { decision: "approved", notes: decisionNote, visible_to_applicant: true });
+      await patchJson(`/applications/${selected}/transition`, { target_state: "approved", note: decisionNote });
+      setMessage("Application accepted and sent to approval.");
+      await loadSelected();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || "Approval requirements are not complete.");
+    }
+  }
+  async function rejectApplication() {
+    if (rejectReason.trim().length < 3) return;
+    try {
+      await postJson(`/applications/${selected}/reject`, { reason: rejectReason, rejected_by: userSession().linkedId });
+      setRejectOpen(false);
+      setMessage("Application sent to rejection.");
+      await loadSelected();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || "Application could not be rejected.");
+    }
+  }
+  const documents = application?.required_documents || application?.documents || [];
+  const applicant = application?.applicant || application?.applicant_ref || {};
+  const parcel = application?.parcel || application?.parcel_ref || {};
+  return <div className="s2-legal-review-page">
+    <header className="s2-legal-header"><Link to={selected ? `/student2/staff/applications/${selected}` : "/student2/staff"}>← Back to Application Details</Link><div><label>Application<select value={selected} onChange={(event) => setSelected(event.target.value)}>{apps.map((app) => <option key={app.application_id}>{app.application_id}</option>)}</select></label><span className="s2-mini-status purple">{workflowStatusLabel(application?.status || "legal_review")}</span></div></header>
+    {message && <div className="s2-success">{message}</div>}
+    <div className="s2-legal-grid">
+      <section className="s2-legal-left">
+        <article className="s2-card"><h2>Documents for Legal Review</h2><table className="s2-legal-docs"><thead><tr><th>Document Type</th><th>File Name</th><th>Review Status</th><th>Action</th></tr></thead><tbody>{documents.map((doc, index) => <tr key={`${doc.document_type}-${index}`}><td>{labelText(doc.document_type)}</td><td>{doc.file_url ? <a href={doc.file_url} target="_blank" rel="noreferrer">{doc.file_name}</a> : doc.file_name || "Not uploaded"}</td><td><span className={`s2-badge ${badgeTone(doc.status)}`}>{doc.status}</span></td><td><button className="accept" onClick={() => reviewDocument(doc.document_type, "verified")}>✓</button><button className="reject" onClick={() => reviewDocument(doc.document_type, "rejected")}>×</button></td></tr>)}</tbody></table></article>
+        <article className="s2-card"><h2>Remarks / Registrar Decision</h2><textarea maxLength="1000" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /><small>{decisionNote.length}/1000</small></article>
+        <article className="s2-card"><h2>Attachments (Optional)</h2><label className="s2-legal-drop">Drag & drop file here or <b>Choose File</b><span>PDF, JPG, PNG up to 10MB</span><input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(event) => setAttachment(event.target.files?.[0] || null)} /></label>{attachment && <p>{attachment.name}</p>}</article>
+      </section>
+      <aside className="s2-legal-right">
+        <article className="s2-card"><h2>Review Summary</h2><dl><dt>Applicant</dt><dd>{applicant.full_name || application?.applicant_ref?.full_name || "-"}</dd><dt>Type</dt><dd>{labelText(application?.type)}</dd><dt>Parcel Number</dt><dd>{parcel.parcel_number || "-"}</dd><dt>Zone</dt><dd>{parcel.zone_id || "-"}</dd><dt>Area</dt><dd>{parcel.area_sqm || "-"} m²</dd><dt>Submitted On</dt><dd>{shortHumanDate(application?.created_at)}</dd><dt>Current Status</dt><dd>{workflowStatusLabel(application?.status)}</dd></dl></article>
+        <article className="s2-card s2-legal-actions"><h2>Decision Actions</h2><button className="approve" onClick={approve}>Accept & Send to Approval</button><button className="reject" onClick={() => setRejectOpen(true)}>Send to Rejection</button><button className="missing" onClick={missingRequest}>Request Missing Documents</button><button onClick={() => window.history.back()}>Cancel</button></article>
+      </aside>
+    </div>
+    {rejectOpen && <div className="s2-dialog-backdrop"><section className="s2-dialog"><h2>Send to Rejection</h2><label>Reason<textarea value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Ownership documents are invalid." /></label><div className="s2-dialog-actions"><button onClick={() => setRejectOpen(false)}>Cancel</button><button className="danger" onClick={rejectApplication}>Reject Application</button></div></section></div>}
+  </div>;
 }
 
 function Student2ObjectionsMini() {
@@ -1595,6 +1920,11 @@ export function Student2CertificatesPage() {
   const [certs, setCerts] = useState([]);
   const [approved, setApproved] = useState([]);
   const [message, setMessage] = useState("");
+  const [tab, setTab] = useState("approved");
+  const [search, setSearch] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ zone: "", type: "", status: "", date: "" });
+  const [preview, setPreview] = useState(null);
   async function load() {
     getCertificates().then((data) => setCerts(itemsOf(data))).catch(() => setCerts([]));
     getApplications({ status: "approved", limit: 20 }).then((data) => setApproved(itemsOf(data))).catch(() => setApproved([]));
@@ -1602,15 +1932,61 @@ export function Student2CertificatesPage() {
   useEffect(() => { load(); }, []);
   async function generate(applicationId) {
     try {
-      await postJson(`/applications/${applicationId}/certificate`, { issued_by: "student2-registrar" });
+      const result = await postJson(`/applications/${applicationId}/certificate`, { issued_by: "student2-registrar" });
       setMessage(`Certificate generated for ${applicationId}.`);
+      setPreview(result.certificate);
       await load();
     } catch (err) {
       setMessage(err.response?.data?.detail || "Certificate can only be generated for approved applications.");
     }
   }
-  const fallback = [{ application_number: "LRMIS-2025-0006", certificate_id: "CERT-2025-0006", status: "generated" }];
-  return <section className="s2-card s2-full"><h2>Certificate Issuance</h2>{message && <div className="s2-success">{message}</div>}<table className="s2-table"><thead><tr><th>Approved Application</th><th>Certificate ID</th><th>Status</th><th>Action</th></tr></thead><tbody>{(certs.length ? certs : fallback).map((c) => <tr key={c.certificate_id}><td>{c.application_number}</td><td>{c.certificate_id}</td><td><span className={`s2-badge ${badgeTone(c.status)}`}>{c.status}</span></td><td><Link to={`/student2/track/${c.application_number}`}>View / Download</Link></td></tr>)}{approved.map((app) => <tr key={app.application_id}><td>{app.application_id}</td><td>Not generated</td><td><span className="s2-badge warn">ready</span></td><td><button type="button" onClick={() => generate(app.application_id)}>Generate Certificate</button></td></tr>)}</tbody></table></section>;
+  const approvedRows = approved.map((app) => ({ ...app, certificate_status: "not_issued" }));
+  const issuedRows = certs.map((cert) => ({ ...cert, certificate_status: cert.status || "issued" }));
+  let rows = tab === "approved" ? approvedRows : tab === "issued" ? issuedRows.filter((item) => item.certificate_status === "issued") : [...approvedRows, ...issuedRows];
+  rows = rows.filter((item) => {
+    const text = `${item.application_id || item.application_number} ${item.applicant_ref?.full_name || item.issued_to?.full_name || ""} ${item.parcel_ref?.parcel_number || ""}`.toLowerCase();
+    return (!search || text.includes(search.toLowerCase()))
+      && (!filters.zone || item.parcel_ref?.zone_id === filters.zone)
+      && (!filters.type || (item.type || item.certificate_type) === filters.type)
+      && (!filters.status || item.certificate_status === filters.status)
+      && (!filters.date || shortDate(item.issued_at || item.updated_at || item.created_at) === filters.date);
+  });
+  const issuedCount = certs.filter((cert) => (cert.status || "issued") === "issued").length;
+  const metadataCount = certs.filter((cert) => cert.status === "metadata_generated").length;
+  const notIssuedCount = approved.length;
+  const total = Math.max(1, issuedCount + metadataCount + notIssuedCount);
+  const issuedDeg = (issuedCount / total) * 360;
+  const metadataDeg = issuedDeg + (metadataCount / total) * 360;
+  const shownPreview = preview || certs[0] || null;
+  function printCertificate() { window.print(); }
+  function downloadCertificate() {
+    if (!shownPreview) return;
+    const blob = new Blob([JSON.stringify(shownPreview, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${shownPreview.certificate_id || "certificate"}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+  return <div className="s2-certificate-page">
+    <header className="s2-certificate-title"><div><h1>Certificate Issuance</h1><p>Generate and manage land registration certificates</p></div></header>
+    {message && <div className="s2-success">{message}</div>}
+    <section className="s2-certificate-tabs"><button className={tab === "approved" ? "active" : ""} onClick={() => setTab("approved")}>Approved Applications</button><button className={tab === "issued" ? "active" : ""} onClick={() => setTab("issued")}>Issued Certificates</button><button className={tab === "all" ? "active" : ""} onClick={() => setTab("all")}>All Certificates</button></section>
+    <div className="s2-certificate-toolbar"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by application, applicant or parcel..." /><button onClick={() => setFiltersOpen((value) => !value)}>Filters</button></div>
+    {filtersOpen && <div className="s2-certificate-filters"><input value={filters.zone} onChange={(event) => setFilters({ ...filters, zone: event.target.value })} placeholder="Zone" /><select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}><option value="">All Types</option><option>ownership_transfer</option><option>first_registration</option><option>parcel_subdivision</option></select><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">All Statuses</option><option value="not_issued">Not Issued</option><option value="metadata_generated">Metadata Generated</option><option value="issued">Issued</option></select><input type="date" value={filters.date} onChange={(event) => setFilters({ ...filters, date: event.target.value })} /></div>}
+    <section className="s2-certificate-layout">
+      <article className="s2-certificate-table-panel"><table><thead><tr><th>Application ID</th><th>Applicant</th><th>Type</th><th>Parcel Number</th><th>Zone</th><th>Approved On</th><th>Certificate Status</th><th>Actions</th></tr></thead><tbody>{rows.map((item, index) => {
+        const applicationId = item.application_id || item.application_number;
+        const isCertificate = Boolean(item.certificate_id);
+        return <tr key={item._id || `${applicationId}-${index}`}><td>{applicationId}</td><td>{item.applicant_ref?.full_name || item.issued_to?.full_name || "-"}</td><td>{labelText(item.type || item.certificate_type)}</td><td>{item.parcel_ref?.parcel_number || item.parcel_number || "-"}</td><td>{item.parcel_ref?.zone_id || item.zone_id || "-"}</td><td>{shortHumanDate(item.approved_at || item.updated_at || item.issued_at)}</td><td><span className={`s2-badge ${item.certificate_status === "issued" ? "good" : "warn"}`}>{item.certificate_status}</span></td><td>{isCertificate ? <button onClick={() => setPreview(item)}>View Certificate</button> : <button onClick={() => generate(applicationId)}>Generate Certificate</button>}</td></tr>;
+      })}</tbody></table></article>
+      <aside className="s2-certificate-side">
+        <article className="s2-certificate-preview"><h2>LAND REGISTRATION CERTIFICATE</h2>{shownPreview ? <><small>Certificate ID</small><strong>{shownPreview.certificate_id}</strong><dl><dt>Owner Name</dt><dd>{shownPreview.issued_to?.full_name || "-"}</dd><dt>Parcel Number</dt><dd>{shownPreview.parcel_number || "-"}</dd><dt>Zone</dt><dd>{shownPreview.zone_id || "-"}</dd><dt>Issue Date</dt><dd>{shortHumanDate(shownPreview.issued_at)}</dd></dl><div className="s2-qr">QR</div><div className="s2-certificate-preview-actions"><button onClick={printCertificate}>Print</button><button onClick={downloadCertificate}>Download</button></div></> : <p>Select or generate a certificate to preview it.</p>}</article>
+        <article className="s2-certificate-summary"><h2>Certificate Status Summary</h2><div className="s2-certificate-donut" style={{ background: `conic-gradient(#10b981 0 ${issuedDeg}deg, #f59e0b ${issuedDeg}deg ${metadataDeg}deg, #7c3aed ${metadataDeg}deg 360deg)` }}><div><strong>{issuedCount + metadataCount + notIssuedCount}</strong><span>Total</span></div></div><p><i className="issued" />Issued <b>{issuedCount}</b></p><p><i className="metadata" />Metadata Generated <b>{metadataCount}</b></p><p><i className="pending" />Not Issued <b>{notIssuedCount}</b></p></article>
+      </aside>
+    </section>
+  </div>;
 }
 
 export function Student2SettingsPage() {

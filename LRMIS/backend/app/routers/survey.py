@@ -36,6 +36,17 @@ class StaffCreate(BaseModel):
         return self
 
 
+class StaffUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2)
+    skills: list[str] | None = None
+    zones: list[str] | None = None
+    zone_ids: list[str] | None = None
+    workload: dict | None = None
+    availability: dict | None = None
+    contacts: dict | None = None
+    active: bool | None = None
+
+
 class SurveyMilestoneInput(BaseModel):
     milestone: str
     scheduled_date: str | None = None
@@ -58,6 +69,25 @@ class SurveyReportInput(BaseModel):
 class FieldNoteInput(BaseModel):
     note: str = Field(..., min_length=1)
     actor: dict | None = None
+
+
+class ReassignSurveyorInput(BaseModel):
+    surveyor_id: str
+    reason: str = Field(default="Manual reassignment", min_length=2)
+
+
+class SurveyRegistrarReviewInput(BaseModel):
+    decision: str
+    note: str = ""
+
+    @model_validator(mode="after")
+    def validate_review(self):
+        self.decision = self.decision.lower()
+        if self.decision not in {"approve", "reject"}:
+            raise ValueError("decision must be approve or reject")
+        if self.decision == "reject" and not self.note.strip():
+            raise ValueError("Rejection reason is required")
+        return self
 
 
 MILESTONES = ["assigned", "visit_scheduled", "arrived_on_site", "survey_started", "survey_completed", "report_uploaded", "registrar_reviewed"]
@@ -130,7 +160,7 @@ def survey_skill_required(application_type: str) -> str:
 
 
 @router.post("/staff/")
-def create_staff(payload: StaffCreate, user: dict = Depends(require_roles("staff"))):
+def create_staff(payload: StaffCreate, user: dict = Depends(require_roles("staff", "surveyor"))):
     existing = db.staff_members.find_one({"staff_code": payload.staff_code})
     if existing:
         return serialize_object_id(existing)
@@ -140,7 +170,33 @@ def create_staff(payload: StaffCreate, user: dict = Depends(require_roles("staff
     staff["updated_at"] = now()
     result = db.staff_members.insert_one(staff)
     staff["_id"] = result.inserted_id
+    db.performance_logs.insert_one({
+        "event_type": "surveyor_created",
+        "staff_id": str(result.inserted_id),
+        "staff_code": staff["staff_code"],
+        "actor": {"role": user["role"], "id": user["linked_id"]},
+        "created_at": now(),
+    })
     return serialize_object_id(staff)
+
+
+@router.get("/staff/")
+def list_staff(
+    role: str | None = None,
+    user: dict = Depends(require_roles("staff", "surveyor")),
+):
+    query = {"role": role} if role else {}
+    rows = []
+    for staff in db.staff_members.find(query).sort("name", 1):
+        staff_id = str(staff["_id"])
+        active_tasks = db.survey_tasks.count_documents({
+            "assigned_surveyor": staff_id,
+            "status": {"$nin": ["registrar_reviewed"]},
+        })
+        staff.setdefault("workload", {})
+        staff["workload"]["active_tasks"] = active_tasks
+        rows.append(staff)
+    return serialize_object_id({"items": rows, "total": len(rows)})
 
 
 @router.get("/staff/{staff_id}")
@@ -160,8 +216,71 @@ def get_staff(staff_id: str, user: dict = Depends(require_roles("staff", "survey
     return serialize_object_id(staff)
 
 
+@router.patch("/staff/{staff_id}")
+def update_staff(
+    staff_id: str,
+    payload: StaffUpdate,
+    user: dict = Depends(require_roles("staff", "surveyor")),
+):
+    existing = db.staff_members.find_one(staff_query(staff_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    updates = payload.model_dump(exclude_none=True)
+    if "zones" in updates:
+        updates["zone_ids"] = updates["zones"]
+    elif "zone_ids" in updates:
+        updates["zones"] = updates["zone_ids"]
+    updates["updated_at"] = now()
+    db.staff_members.update_one({"_id": existing["_id"]}, {"$set": updates})
+    db.performance_logs.insert_one({
+        "event_type": "surveyor_updated",
+        "staff_id": str(existing["_id"]),
+        "changed_fields": list(updates.keys()),
+        "actor": {"role": user["role"], "id": user["linked_id"]},
+        "created_at": now(),
+    })
+    return serialize_object_id(db.staff_members.find_one({"_id": existing["_id"]}))
+
+
+@router.delete("/staff/{staff_id}")
+def delete_staff(staff_id: str, user: dict = Depends(require_roles("staff", "surveyor"))):
+    existing = db.staff_members.find_one(staff_query(staff_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    active_tasks = db.survey_tasks.count_documents({
+        "assigned_surveyor": str(existing["_id"]),
+        "status": {"$nin": ["registrar_reviewed"]},
+    })
+    if active_tasks:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete surveyor with {active_tasks} active task(s). Reassign them first.",
+        )
+    active_reviews = db.land_applications.count_documents({
+        "$or": [
+            {"assignment.assigned_registrar": str(existing["_id"])},
+            {"assigned_registrar": str(existing["_id"])},
+        ],
+        "status": {"$in": ["legal_review", "pre_checked", "under_objection"]},
+    })
+    if active_reviews:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete registrar with {active_reviews} active review(s). Reassign them first.",
+        )
+    db.staff_members.delete_one({"_id": existing["_id"]})
+    db.performance_logs.insert_one({
+        "event_type": "surveyor_deleted",
+        "staff_id": str(existing["_id"]),
+        "staff_code": existing.get("staff_code"),
+        "actor": {"role": user["role"], "id": user["linked_id"]},
+        "created_at": now(),
+    })
+    return {"message": "Surveyor deleted successfully"}
+
+
 @router.post("/applications/{application_id}/auto-assign-surveyor")
-def auto_assign_surveyor(application_id: str, user: dict = Depends(require_roles("staff"))):
+def auto_assign_surveyor(application_id: str, user: dict = Depends(require_roles("staff", "surveyor"))):
     try:
         application = get_application(application_id)
     except WorkflowError as exc:
@@ -239,6 +358,84 @@ def auto_assign_surveyor(application_id: str, user: dict = Depends(require_roles
         metadata={"surveyor_id": str(surveyor["_id"]), "task_id": task["task_id"]},
     )
     return serialize_object_id({"surveyor": surveyor, "survey_task": task})
+
+
+@router.patch("/survey-tasks/{task_id}/reassign")
+def reassign_surveyor(
+    task_id: str,
+    payload: ReassignSurveyorInput,
+    user: dict = Depends(require_roles("staff", "surveyor")),
+):
+    try:
+        task_query = {"$or": [{"_id": ObjectId(task_id)}, {"task_id": task_id}]}
+    except Exception:
+        task_query = {"task_id": task_id}
+    task = db.survey_tasks.find_one(task_query)
+    if not task:
+        raise HTTPException(status_code=404, detail="Survey task not found")
+    surveyor = db.staff_members.find_one(staff_query(payload.surveyor_id))
+    if not surveyor or surveyor.get("role") != "surveyor":
+        raise HTTPException(status_code=404, detail="Surveyor not found")
+    if surveyor.get("active") is False or surveyor.get("availability", {}).get("active") is False:
+        raise HTTPException(status_code=400, detail="Selected surveyor is not available")
+    parcel_ref = task.get("parcel_ref") or {}
+    zones = surveyor.get("zones") or surveyor.get("zone_ids") or []
+    if parcel_ref.get("zone_id") not in zones and "ALL" not in zones:
+        raise HTTPException(status_code=400, detail="Selected surveyor does not cover this zone")
+    workload = surveyor.get("workload") or {}
+    if workload.get("active_tasks", 0) >= workload.get("max_tasks", 10):
+        raise HTTPException(status_code=400, detail="Selected surveyor has reached maximum workload")
+
+    old_id = task.get("assigned_surveyor")
+    new_id = str(surveyor["_id"])
+    if old_id == new_id:
+        return serialize_object_id(task)
+    if old_id:
+        try:
+            db.staff_members.update_one(
+                {"_id": ObjectId(old_id)},
+                {"$inc": {"workload.active_tasks": -1}, "$set": {"updated_at": now()}},
+            )
+        except Exception:
+            pass
+    db.staff_members.update_one(
+        {"_id": surveyor["_id"]},
+        {"$inc": {"workload.active_tasks": 1}, "$set": {"updated_at": now()}},
+    )
+    db.survey_tasks.update_one(
+        {"_id": task["_id"]},
+        {
+            "$set": {
+                "assigned_surveyor": new_id,
+                "assigned_surveyor_id": new_id,
+                "updated_at": now(),
+            },
+            "$push": {
+                "milestones": {
+                    "milestone": "reassigned",
+                    "at": now(),
+                    "notes": payload.reason,
+                    "actor": {"role": user["role"], "id": user["linked_id"]},
+                }
+            },
+        },
+    )
+    application_query = {"_id": ObjectId(task["application_id"])} if ObjectId.is_valid(task.get("application_id", "")) else {"application_id": task.get("application_number")}
+    db.land_applications.update_one(
+        application_query,
+        {"$set": {"assignment.assigned_surveyor": new_id, "updated_at": now()}},
+    )
+    db.performance_logs.insert_one({
+        "event_type": "survey_task_reassigned",
+        "task_id": str(task["_id"]),
+        "application_id": task.get("application_number"),
+        "old_surveyor_id": old_id,
+        "new_surveyor_id": new_id,
+        "reason": payload.reason,
+        "actor": {"role": user["role"], "id": user["linked_id"]},
+        "created_at": now(),
+    })
+    return serialize_object_id(db.survey_tasks.find_one({"_id": task["_id"]}))
 
 
 @router.patch("/applications/{application_id}/survey-milestone")
@@ -398,8 +595,26 @@ def list_survey_tasks(user: dict = Depends(require_roles("staff", "surveyor"))):
     return serialize_object_id({"items": tasks, "count": len(tasks)})
 
 
+@router.get("/survey-reports")
+def list_survey_reports(user: dict = Depends(require_roles("staff", "surveyor"))):
+    reports = []
+    for report in db.survey_reports.find({}).sort("uploaded_at", -1):
+        task = db.survey_tasks.find_one({"_id": ObjectId(report["survey_task_id"])}) if ObjectId.is_valid(report.get("survey_task_id", "")) else None
+        surveyor = None
+        if report.get("assigned_surveyor") and ObjectId.is_valid(report["assigned_surveyor"]):
+            surveyor = db.staff_members.find_one({"_id": ObjectId(report["assigned_surveyor"])})
+        report["task"] = enrich_survey_task(task) if task else None
+        report["surveyor_name"] = (surveyor or {}).get("name") or (surveyor or {}).get("staff_code")
+        reports.append(report)
+    return serialize_object_id({"items": reports, "count": len(reports)})
+
+
 @router.patch("/applications/{application_id}/survey-registrar-review")
-def survey_registrar_review(application_id: str, decision: str, note: str | None = None, user: dict = Depends(require_roles("staff"))):
+def survey_registrar_review(
+    application_id: str,
+    payload: SurveyRegistrarReviewInput,
+    user: dict = Depends(require_roles("staff")),
+):
     try:
         application = get_application(application_id)
     except WorkflowError as exc:
@@ -407,13 +622,51 @@ def survey_registrar_review(application_id: str, decision: str, note: str | None
     task = db.survey_tasks.find_one({"application_id": str(application["_id"])})
     if not task or task.get("current_milestone") != "report_uploaded":
         raise HTTPException(status_code=400, detail="Report must be uploaded before registrar survey review")
+    approved = payload.decision == "approve"
+    milestone = "registrar_reviewed" if approved else "survey_completed"
+    review = {
+        "decision": payload.decision,
+        "note": payload.note,
+        "reviewed_by": user["linked_id"],
+        "reviewed_at": now(),
+    }
     db.survey_tasks.update_one(
         {"_id": task["_id"]},
         {
-            "$set": {"status": "registrar_reviewed", "current_milestone": "registrar_reviewed", "registrar_review": {"decision": decision, "note": note, "reviewed_by": user["linked_id"], "reviewed_at": now()}},
-            "$push": {"milestones": {"milestone": "registrar_reviewed", "at": now(), "notes": note, "actor": {"role": "staff", "id": user["linked_id"]}}},
+            "$set": {
+                "status": milestone,
+                "current_milestone": milestone,
+                "registrar_review": review,
+                "report_uploaded": approved,
+                "updated_at": now(),
+            },
+            "$push": {
+                "milestones": {
+                    "milestone": "registrar_reviewed" if approved else "report_rejected",
+                    "at": now(),
+                    "notes": payload.note,
+                    "actor": {"role": "staff", "id": user["linked_id"]},
+                }
+            },
         },
     )
-    db.survey_reports.update_many({"application_id": str(application["_id"])}, {"$set": {"registrar_review_status": decision, "reviewed_by": user["linked_id"], "reviewed_at": now()}})
-    log_action(application, "registrar_reviewed", actor={"role": "staff", "id": user["linked_id"]}, metadata={"decision": decision, "note": note})
+    db.survey_reports.update_many(
+        {"application_id": str(application["_id"])},
+        {"$set": {"registrar_review_status": payload.decision, "reviewed_by": user["linked_id"], "reviewed_at": now(), "review_notes": payload.note}},
+    )
+    if approved:
+        db.land_applications.update_one(
+            {"_id": application["_id"]},
+            {"$set": {"status": "surveyed", "workflow.current_state": "surveyed", "updated_at": now()}},
+        )
+    db.notifications.insert_one({
+        "type": "survey_report_review",
+        "recipient_type": "surveyor",
+        "recipient_id": task.get("assigned_surveyor"),
+        "application_number": application["application_id"],
+        "message": f"Survey report {payload.decision}d. {payload.note}".strip(),
+        "created_at": now(),
+        "sent": False,
+    })
+    log_action(application, "registrar_reviewed" if approved else "survey_report_rejected", actor={"role": "staff", "id": user["linked_id"]}, metadata=review)
     return serialize_object_id(db.survey_tasks.find_one({"_id": task["_id"]}))

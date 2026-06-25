@@ -19,6 +19,8 @@ import Student2App, {
   Student2ReviewPage,
   Student2SettingsPage,
   Student2StaffConsolePage,
+  Student2StaffDocumentsPage,
+  Student2StaffMapPage,
   Student2TrackPage,
 } from "./Student2App.jsx";
 import Student3App, {
@@ -27,6 +29,10 @@ import Student3App, {
   Student3ExecutionPage,
   Student3MapPage,
   Student3ReportsPage,
+  Student3SurveyorsPage,
+  Student3RegistrarsPage,
+  Student3AssignmentsPage,
+  Student3RegistrarReviewPage,
   Student3TasksPage,
 } from "./Student3App.jsx";
 import MultiPageApp, {
@@ -125,12 +131,15 @@ function App() {
           <Route path="/student2/objections" element={<Student2ObjectionsPage />} />
           <Route path="/student2/notifications" element={<Student2NotificationsPage />} />
           <Route path="/student2/staff" element={<Student2StaffConsolePage />} />
+          <Route path="/student2/staff/applications/:id" element={<Student2ApplicationDetailsPage />} />
+          <Route path="/student2/staff/applications/:id/map" element={<Student2StaffMapPage />} />
+          <Route path="/student2/staff/applications/:id/documents" element={<Student2StaffDocumentsPage />} />
           <Route path="/student2/review" element={<Student2ReviewPage />} />
           <Route path="/student2/certificates" element={<Student2CertificatesPage />} />
           <Route path="/student2/settings" element={<Student2SettingsPage />} />
         </Route>
         <Route path="/staff" element={<ProtectedRoute role="staff"><Shell role="staff"><StaffPages /></Shell></ProtectedRoute>} />
-        <Route element={<ProtectedRoute role="surveyor"><Student3App /></ProtectedRoute>}>
+        <Route element={<ProtectedRoute role={["surveyor", "staff", "registrar"]}><Student3App /></ProtectedRoute>}>
           <Route path="/student3" element={<Navigate to="/student3/dashboard" replace />} />
           <Route path="/student3/dashboard" element={<Student3Dashboard />} />
           <Route path="/student3/tasks" element={<Student3TasksPage />} />
@@ -139,6 +148,10 @@ function App() {
           <Route path="/student3/map" element={<Student3MapPage />} />
           <Route path="/student3/analytics" element={<Student3AnalyticsPage />} />
           <Route path="/student3/reports" element={<Student3ReportsPage />} />
+          <Route path="/student3/surveyors" element={<Student3SurveyorsPage />} />
+          <Route path="/student3/registrars" element={<Student3RegistrarsPage />} />
+          <Route path="/student3/assignments" element={<Student3AssignmentsPage />} />
+          <Route path="/student3/registrar-review" element={<Student3RegistrarReviewPage />} />
         </Route>
         <Route path="/survey/tasks" element={<Navigate to="/student3/tasks" replace />} />
         <Route path="/surveyor" element={<Navigate to="/student3/dashboard" />} />
@@ -151,7 +164,7 @@ function App() {
 function ProtectedRoute({ role, children }) {
   const session = getSession();
   if (!session.token) return <Navigate to="/login" replace />;
-  if (session.role !== role) return <Navigate to="/unauthorized" replace />;
+  if (Array.isArray(role) ? !role.includes(session.role) : session.role !== role) return <Navigate to="/unauthorized" replace />;
   return children;
 }
 
@@ -177,9 +190,9 @@ function LoginPage() {
     try {
       const data = await login(username, password);
       saveSession(data);
-      if (data.role === "applicant") navigate("/student2/dashboard");
-      else if (data.role === "staff" || data.role === "registrar") navigate("/student1/applicant-dashboard");
-      else if (data.role === "surveyor") navigate("/student3/dashboard");
+      if (data.role === "applicant") navigate("/student1/applicant-dashboard");
+      else if (data.role === "staff" || data.role === "registrar") navigate("/student2/dashboard");
+      else if (data.role === "surveyor") navigate("/student3/tasks");
       else navigate("/dashboard");
     } catch (err) {
       setError(err.response?.data?.detail || "Invalid username or password");

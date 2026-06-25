@@ -1,9 +1,80 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime, time, timezone
+
+from fastapi import APIRouter, Depends, Query
 
 from app.database import db, serialize_object_id
 from app.services.auth import require_roles
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
+
+@router.get("/dashboard")
+def analytics_dashboard(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    user: dict = Depends(require_roles("staff", "surveyor")),
+):
+    match = date_range_match(date_from, date_to, "created_at")
+    pending_statuses = ["submitted", "pre_checked", "survey_required", "surveyed", "legal_review", "missing_documents", "under_objection", "on_hold"]
+    applications_over_time = list(db.land_applications.aggregate([
+        {"$match": match},
+        {"$match": {"status": {"$in": ["submitted", "approved", "rejected"]}}},
+        {"$group": {"_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$created_at"}}, "status": "$status"}, "count": {"$sum": 1}}},
+        {"$sort": {"_id.month": 1}},
+    ]))
+    pending_by_zone = list(db.land_applications.aggregate([
+        {"$match": {**match, "status": {"$in": pending_statuses}}},
+        {"$group": {"_id": "$parcel_ref.zone_id", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]))
+    closed_match = {**match, "status": {"$in": ["closed", "certificate_issued"]}, "created_at": {"$exists": True}, "updated_at": {"$exists": True}}
+    if "created_at" in match:
+        closed_match["created_at"] = {**match["created_at"], "$exists": True}
+    processing = list(db.land_applications.aggregate([
+        {"$match": closed_match},
+        {"$project": {"days": {"$dateDiff": {"startDate": "$created_at", "endDate": "$updated_at", "unit": "day"}}}},
+        {"$group": {"_id": None, "average_days": {"$avg": "$days"}, "count": {"$sum": 1}}},
+    ]))
+    objection_match = date_range_match(date_from, date_to, "created_at")
+    objections = list(db.objections.aggregate([
+        {"$match": objection_match},
+        {"$group": {"_id": {"$ifNull": ["$objection_type", "$reason"]}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]))
+    certificate_match = date_range_match(date_from, date_to, "issued_at")
+    certificates = list(db.certificates.aggregate([
+        {"$match": certificate_match},
+        {"$group": {"_id": {"$dateToString": {"format": "%Y-%m", "date": "$issued_at"}}, "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]))
+    surveyors = []
+    task_match = date_range_match(date_from, date_to, "created_at")
+    for staff in db.staff_members.find({"role": "surveyor"}):
+        surveyors.append({
+            "_id": str(staff["_id"]),
+            "label": staff.get("name") or staff.get("full_name") or staff.get("staff_code"),
+            "count": db.survey_tasks.count_documents({"assigned_surveyor": str(staff["_id"]), **task_match}),
+        })
+    surveyors.sort(key=lambda item: item["count"], reverse=True)
+    return serialize_object_id({
+        "applications_over_time": applications_over_time,
+        "pending_by_zone": pending_by_zone,
+        "average_processing_days": round(processing[0]["average_days"], 1) if processing else 0,
+        "surveyor_workload": surveyors,
+        "objections_by_type": objections,
+        "certificates_by_month": certificates,
+    })
+
+
+def date_range_match(date_from: str | None, date_to: str | None, field: str) -> dict:
+    if not date_from and not date_to:
+        return {}
+    value = {}
+    if date_from:
+        value["$gte"] = datetime.combine(datetime.fromisoformat(date_from).date(), time.min, tzinfo=timezone.utc)
+    if date_to:
+        value["$lte"] = datetime.combine(datetime.fromisoformat(date_to).date(), time.max, tzinfo=timezone.utc)
+    return {field: value}
 
 
 @router.get("/kpis")

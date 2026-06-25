@@ -400,6 +400,7 @@ def get_application_by_id(application_id: str, user: dict = Depends(get_current_
     except WorkflowError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     ensure_application_access(application, user)
+    applicant = db.applicants.find_one({"_id": object_id(application.get("applicant_ref", {}).get("applicant_id"))})
     parcel = db.parcels.find_one({"_id": object_id(application.get("parcel_ref", {}).get("parcel_id"))})
     objections = list(db.objections.find({"application_id": str(application["_id"])}))
     certificate = db.certificates.find_one({"application_id": str(application["_id"])})
@@ -409,6 +410,7 @@ def get_application_by_id(application_id: str, user: dict = Depends(get_current_
     return serialize_object_id(
         {
             **application,
+            "applicant": applicant,
             "parcel": parcel,
             "attachments": application.get("documents", []),
             "objections": objections,
