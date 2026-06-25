@@ -23,6 +23,7 @@ COLLECTIONS = {
     "survey_reports": db.survey_reports,
     "certificates": db.certificates,
     "performance_logs": db.performance_logs,
+    "generated_reports": db.generated_reports,
     "application_notes": db.application_notes,
     "users": db.users,
 }

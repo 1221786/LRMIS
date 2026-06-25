@@ -1,11 +1,119 @@
 from datetime import datetime, time, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.database import db, serialize_object_id
 from app.services.auth import require_roles
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
+
+class ManagementReportInput(BaseModel):
+    report_type: str
+    date_from: str
+    date_to: str
+    zone: str = "all"
+    format: str = "pdf"
+
+
+REPORT_NAMES = {
+    "applications_summary": "Applications Summary",
+    "surveyor_performance": "Surveyor Performance",
+    "registrar_performance": "Registrar Performance",
+    "hotspot_zones": "Hotspot Zones",
+}
+
+
+def report_date_match(payload: ManagementReportInput, field: str = "created_at") -> dict:
+    start = datetime.fromisoformat(payload.date_from).replace(tzinfo=timezone.utc)
+    end = datetime.combine(datetime.fromisoformat(payload.date_to).date(), time.max, tzinfo=timezone.utc)
+    return {field: {"$gte": start, "$lte": end}}
+
+
+@router.post("/management-reports")
+def generate_management_report(payload: ManagementReportInput, user: dict = Depends(require_roles("staff", "surveyor"))):
+    if payload.report_type not in REPORT_NAMES:
+        raise HTTPException(status_code=422, detail="Invalid report type")
+    if payload.format not in {"pdf", "csv"}:
+        raise HTTPException(status_code=422, detail="Format must be pdf or csv")
+
+    app_match = report_date_match(payload)
+    if payload.zone != "all":
+        app_match["parcel_ref.zone_id"] = payload.zone
+    rows = []
+
+    if payload.report_type == "applications_summary":
+        rows = list(db.land_applications.aggregate([
+            {"$match": app_match},
+            {"$group": {"_id": {"status": "$status", "type": "$type"}, "count": {"$sum": 1}}},
+            {"$sort": {"_id.status": 1, "_id.type": 1}},
+        ]))
+    elif payload.report_type == "surveyor_performance":
+        task_match = report_date_match(payload)
+        if payload.zone != "all":
+            task_match["parcel_ref.zone_id"] = payload.zone
+        rows = list(db.survey_tasks.aggregate([
+            {"$match": task_match},
+            {"$group": {
+                "_id": "$assigned_surveyor",
+                "assigned": {"$sum": 1},
+                "completed": {"$sum": {"$cond": [{"$in": ["$status", ["survey_completed", "report_uploaded", "registrar_reviewed"]]}, 1, 0]}},
+            }},
+        ]))
+        for row in rows:
+            staff = db.staff_members.find_one({"_id": ObjectId(row["_id"])}) if ObjectId.is_valid(row.get("_id", "")) else None
+            row["name"] = (staff or {}).get("name") or row["_id"]
+    elif payload.report_type == "registrar_performance":
+        rows = list(db.performance_logs.aggregate([
+            {"$unwind": "$event_stream"},
+            {"$match": {
+                "event_stream.at": report_date_match(payload, "event_stream.at")["event_stream.at"],
+                "event_stream.type": {"$in": ["registrar_reviewed", "survey_report_rejected", "registrar_review"]},
+            }},
+            {"$group": {
+                "_id": "$event_stream.by.id",
+                "reviewed": {"$sum": 1},
+                "approved": {"$sum": {"$cond": [{"$eq": ["$event_stream.metadata.decision", "approve"]}, 1, 0]}},
+                "rejected": {"$sum": {"$cond": [{"$eq": ["$event_stream.metadata.decision", "reject"]}, 1, 0]}},
+            }},
+        ]))
+        for row in rows:
+            staff = db.staff_members.find_one({"_id": ObjectId(row["_id"])}) if ObjectId.is_valid(row.get("_id", "")) else None
+            row["name"] = (staff or {}).get("name") or row["_id"]
+    else:
+        rows = list(db.land_applications.aggregate([
+            {"$match": app_match},
+            {"$group": {
+                "_id": "$parcel_ref.zone_id",
+                "applications": {"$sum": 1},
+                "objections": {"$sum": {"$cond": [{"$eq": ["$status", "under_objection"]}, 1, 0]}},
+                "survey_required": {"$sum": {"$cond": [{"$eq": ["$status", "survey_required"]}, 1, 0]}},
+            }},
+            {"$sort": {"applications": -1}},
+        ]))
+
+    generated = {
+        "report_name": REPORT_NAMES[payload.report_type],
+        "report_type": payload.report_type,
+        "category": "Analytics" if payload.report_type == "hotspot_zones" else "Performance" if "performance" in payload.report_type else "Summary",
+        "date_from": payload.date_from,
+        "date_to": payload.date_to,
+        "zone": payload.zone,
+        "format": payload.format.upper(),
+        "rows": serialize_object_id(rows),
+        "generated_by": user["linked_id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    result = db.generated_reports.insert_one(generated)
+    generated["_id"] = result.inserted_id
+    return serialize_object_id(generated)
+
+
+@router.get("/management-reports")
+def list_management_reports(user: dict = Depends(require_roles("staff", "surveyor"))):
+    rows = list(db.generated_reports.find({}).sort("created_at", -1).limit(30))
+    return serialize_object_id({"items": rows, "count": len(rows)})
 
 
 @router.get("/dashboard")

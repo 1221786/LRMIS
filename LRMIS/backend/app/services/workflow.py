@@ -96,11 +96,21 @@ def validate_transition(application: dict, new_status: str) -> None:
             raise WorkflowError("Certificate request does not require field survey")
 
     if new_status == "surveyed":
-        report_exists = db.survey_reports.find_one({"application_id": str(application["_id"])})
+        report_exists = db.survey_reports.find_one(
+            {
+                "$or": [
+                    {"application_id": str(application["_id"])},
+                    {"application_number": application.get("application_id")},
+                ],
+                "status": {"$in": ["uploaded", "approved", None]},
+            }
+        )
         if not report_exists and not application.get("survey_report_exists"):
             raise WorkflowError("Cannot mark surveyed unless survey report exists")
         task = db.survey_tasks.find_one({"application_id": str(application["_id"])})
-        if not task or task.get("status") not in {"survey_completed", "report_uploaded"}:
+        if not task:
+            task = db.survey_tasks.find_one({"application_number": application.get("application_id")})
+        if not task or task.get("status") not in {"survey_completed", "report_uploaded", "registrar_reviewed"}:
             raise WorkflowError("Cannot mark surveyed unless survey task is completed or report uploaded")
 
     if new_status == "legal_review":

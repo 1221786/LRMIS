@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import L from "leaflet";
 import {
+  API_BASE_URL,
   api,
   getApplicant,
   getApplicantApplications,
@@ -718,6 +719,8 @@ export function Student2ApplicationDetailsPage() {
       applicant={applicant}
       parcel={parcel}
       documents={documents}
+      surveyReport={app.survey_report}
+      surveyTask={app.survey_task}
       note={note}
       setNote={setNote}
       targetStatus={targetStatus}
@@ -860,6 +863,8 @@ function StaffApplicationDetails({
   applicant,
   parcel,
   documents,
+  surveyReport,
+  surveyTask,
   note,
   setNote,
   targetStatus,
@@ -904,6 +909,11 @@ function StaffApplicationDetails({
       </section>
 
       <section className="s2-staff-detail-bottom">
+        <article className="s2-staff-detail-card s2-survey-report-card">
+          <div className="s2-panel-title"><h2>Survey Report</h2><span className={`s2-badge ${surveyReport ? "good" : "warn"}`}>{surveyReport ? (surveyReport.registrar_review_status || surveyReport.status || "uploaded") : "Not Uploaded"}</span></div>
+          {surveyReport ? <dl><dt>Report ID</dt><dd>{surveyReport.report_id || surveyReport._id}</dd><dt>Surveyor</dt><dd>{surveyReport.surveyor_name || surveyReport.assigned_surveyor || "-"}</dd><dt>Survey Date</dt><dd>{shortHumanDate(surveyReport.uploaded_at)}</dd><dt>Report Type</dt><dd>{labelText(surveyReport.report_type)}</dd><dt>Survey Method</dt><dd>{surveyReport.findings?.measured_by || surveyReport.findings?.survey_method || "-"}</dd><dt>Boundary Status</dt><dd>{surveyReport.findings?.boundary_matches ? "Verified" : "Pending Review"}</dd><dt>Notes</dt><dd>{surveyReport.summary || "-"}</dd><dt>Milestone</dt><dd>{labelText(surveyTask?.current_milestone || surveyTask?.status || "report_uploaded")}</dd></dl> : <p>No survey report is linked to this application. Complete Student 3 Survey Task Execution and upload the report first.</p>}
+          <div className="s2-survey-report-actions">{surveyReport?.file_url && <a href={`${API_BASE_URL}${surveyReport.file_url}`} target="_blank" rel="noreferrer">Download Report</a>}<Link to="/student3/registrar-review">Registrar Review</Link></div>
+        </article>
         <article className="s2-staff-detail-card">
           <div className="s2-panel-title"><h2>Uploaded Documents ({documents.length})</h2><Link to={`/student2/staff/applications/${app.application_id}/documents`}>View All Documents</Link></div>
           <table className="s2-staff-doc-table"><thead><tr><th>Document Type</th><th>File Name</th><th>Status</th><th>Uploaded On</th></tr></thead><tbody>{documents.map((doc, index) => <tr key={`${doc.document_type}-${index}`}><td>{labelText(doc.document_type)}</td><td>{doc.file_url ? <a href={doc.file_url} target="_blank" rel="noreferrer">{doc.file_name}</a> : doc.file_name || "Not uploaded"}</td><td><span className={`s2-badge ${badgeTone(doc.status)}`}>{doc.status}</span></td><td>{shortHumanDate(doc.uploaded_at)}</td></tr>)}</tbody></table>

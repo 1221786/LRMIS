@@ -12,6 +12,8 @@ apiClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  const linkedId = localStorage.getItem("linked_id");
+  if (linkedId) config.headers["X-Linked-Id"] = linkedId;
   return config;
 });
 
@@ -58,6 +60,8 @@ export const getSurveyors = () => api("/analytics/surveyors");
 export const getRegistrars = () => api("/analytics/registrars");
 export const getPendingHeatmap = () => api("/analytics/geofeeds/pending-heatmap");
 export const getAnalyticsDashboard = (params = {}) => api("/analytics/dashboard", { params });
+export const getManagementReports = () => api("/analytics/management-reports");
+export const generateManagementReport = (body) => api("/analytics/management-reports", { method: "POST", data: body });
 export const getSurveyTasks = () => api("/survey-tasks");
 export const autoAssignSurveyor = (applicationId) => api(`/applications/${applicationId}/auto-assign-surveyor`, { method: "POST" });
 export const reassignSurveyTask = (taskId, body) => api(`/survey-tasks/${taskId}/reassign`, { method: "PATCH", data: body });

@@ -508,6 +508,7 @@ def upload_survey_report(application_id: str, payload: SurveyReportInput, user: 
         "attachments": payload.attachments,
         "uploaded_at": now(),
         "registrar_review_status": "pending",
+        "status": "uploaded",
         "created_at": now(),
     }
     result = db.survey_reports.insert_one(report)
@@ -522,9 +523,16 @@ def upload_survey_report(application_id: str, payload: SurveyReportInput, user: 
     )
     db.land_applications.update_one(
         {"_id": application["_id"]},
-        {"$set": {"survey_report_exists": True, "updated_at": now()}},
+        {"$set": {
+            "survey_report_exists": True,
+            "status": "surveyed",
+            "workflow.current_state": "surveyed",
+            "workflow.allowed_next": ["legal_review", "under_objection", "missing_documents", "rejected"],
+            "updated_at": now(),
+        }},
     )
     log_action(application, "survey_report_uploaded", actor=payload.actor, metadata={"report_id": str(result.inserted_id)})
+    log_action(application, "status_transition", actor=payload.actor, metadata={"from": application.get("status"), "to": "surveyed", "source": "survey_report_upload"})
     return serialize_object_id(report)
 
 

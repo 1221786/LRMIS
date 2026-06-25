@@ -39,6 +39,68 @@ DOCUMENT_REQUIREMENTS = {
 }
 
 
+def ensure_survey_task(application: dict, actor: dict | None = None) -> dict:
+    existing = db.survey_tasks.find_one(
+        {"$or": [{"application_id": str(application["_id"])}, {"application_number": application["application_id"]}]}
+    )
+    if existing:
+        return existing
+
+    zone_id = (application.get("parcel_ref") or {}).get("zone_id")
+    application_type = application.get("type") or application.get("application_type")
+    required_skill = "boundary_survey" if application_type in {"parcel_subdivision", "parcel_merge", "boundary_correction"} else "gps_mapping"
+    candidates = list(db.staff_members.find({
+        "role": "surveyor",
+        "active": {"$ne": False},
+        "$or": [{"availability.active": True}, {"availability.active": {"$exists": False}}],
+    }))
+    if not candidates:
+        raise WorkflowError("Cannot create survey task because no active surveyor exists")
+
+    def score(surveyor: dict) -> tuple:
+        zones = surveyor.get("zones") or surveyor.get("zone_ids") or []
+        skills = surveyor.get("skills") or []
+        workload = surveyor.get("workload") or {}
+        return (
+            0 if zone_id in zones or "ALL" in zones else 1,
+            0 if required_skill in skills or not skills else 1,
+            0 if workload.get("active_tasks", 0) < workload.get("max_tasks", 10) else 1,
+            workload.get("active_tasks", 0),
+        )
+
+    surveyor = sorted(candidates, key=score)[0]
+    workload = surveyor.get("workload") or {}
+    if workload.get("active_tasks", 0) >= workload.get("max_tasks", 10):
+        raise WorkflowError("Cannot create survey task because all surveyors reached maximum workload")
+
+    task = {
+        "task_id": f"SURV-2026-{db.survey_tasks.count_documents({}) + 1:04d}",
+        "application_id": str(application["_id"]),
+        "application_number": application["application_id"],
+        "parcel_id": (application.get("parcel_ref") or {}).get("parcel_id"),
+        "parcel_ref": application.get("parcel_ref") or {},
+        "assigned_surveyor": str(surveyor["_id"]),
+        "assigned_surveyor_id": str(surveyor["_id"]),
+        "status": "assigned",
+        "current_milestone": "assigned",
+        "priority": application.get("priority", "normal"),
+        "milestones": [{"milestone": "assigned", "at": now(), "notes": "Auto assigned after survey_required", "actor": actor}],
+        "field_notes": [],
+        "report_uploaded": False,
+        "created_at": now(),
+        "updated_at": now(),
+    }
+    result = db.survey_tasks.insert_one(task)
+    task["_id"] = result.inserted_id
+    db.staff_members.update_one({"_id": surveyor["_id"]}, {"$inc": {"workload.active_tasks": 1}, "$set": {"updated_at": now()}})
+    db.land_applications.update_one(
+        {"_id": application["_id"]},
+        {"$set": {"assignment.assigned_surveyor": str(surveyor["_id"]), "assignment.survey_task_id": str(result.inserted_id), "updated_at": now()}},
+    )
+    log_action(application, "survey_assigned", actor=actor or {"role": "system", "id": None}, metadata={"task_id": task["task_id"], "surveyor_id": str(surveyor["_id"])})
+    return task
+
+
 class ApplicantInput(BaseModel):
     full_name: str = Field(..., min_length=2)
     national_id: str = Field(..., min_length=5)
@@ -404,8 +466,13 @@ def get_application_by_id(application_id: str, user: dict = Depends(get_current_
     parcel = db.parcels.find_one({"_id": object_id(application.get("parcel_ref", {}).get("parcel_id"))})
     objections = list(db.objections.find({"application_id": str(application["_id"])}))
     certificate = db.certificates.find_one({"application_id": str(application["_id"])})
-    survey_task = db.survey_tasks.find_one({"application_id": str(application["_id"])})
-    survey_report = db.survey_reports.find_one({"application_id": str(application["_id"])})
+    survey_task = db.survey_tasks.find_one(
+        {"$or": [{"application_id": str(application["_id"])}, {"application_number": application["application_id"]}]}
+    )
+    survey_report = db.survey_reports.find_one(
+        {"$or": [{"application_id": str(application["_id"])}, {"application_number": application["application_id"]}]},
+        sort=[("uploaded_at", -1)],
+    )
     timeline = db.performance_logs.find_one({"application_id": str(application["_id"])})
     return serialize_object_id(
         {
@@ -464,6 +531,12 @@ def transition(application_id: str, payload: TransitionInput, user: dict = Depen
             actor=payload.actor,
             metadata={"note": payload.note} if payload.note else {},
         )
+        if payload.new_status == "survey_required":
+            ensure_survey_task(
+                get_application(application_id),
+                actor=payload.actor or {"role": user["role"], "id": user["linked_id"]},
+            )
+            updated = serialize_object_id(get_application(application_id))
     except WorkflowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     create_notification(get_application(application_id), f"Your application status changed to {payload.new_status}")

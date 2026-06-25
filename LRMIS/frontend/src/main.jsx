@@ -33,6 +33,7 @@ import Student3App, {
   Student3RegistrarsPage,
   Student3AssignmentsPage,
   Student3RegistrarReviewPage,
+  Student3ManagementReportsPage,
   Student3TasksPage,
 } from "./Student3App.jsx";
 import MultiPageApp, {
@@ -152,6 +153,7 @@ function App() {
           <Route path="/student3/registrars" element={<Student3RegistrarsPage />} />
           <Route path="/student3/assignments" element={<Student3AssignmentsPage />} />
           <Route path="/student3/registrar-review" element={<Student3RegistrarReviewPage />} />
+          <Route path="/student3/management-reports" element={<Student3ManagementReportsPage />} />
         </Route>
         <Route path="/survey/tasks" element={<Navigate to="/student3/tasks" replace />} />
         <Route path="/surveyor" element={<Navigate to="/student3/dashboard" />} />

@@ -23,18 +23,14 @@ import {
   reassignSurveyTask,
   getSurveyReports,
   reviewSurveyReport,
+  getManagementReports,
+  generateManagementReport,
   getSurveyTasks,
   patchJson,
   postJson,
 } from "./api/client";
 
 const milestones = ["assigned", "visit_scheduled", "arrived_on_site", "survey_started", "survey_completed", "report_uploaded", "registrar_reviewed"];
-const fallbackSurveyTasks = [
-  { demo: true, task_id: "SVY-2026-101", application_number: "LRMIS-2026-0001", parcel_ref: { parcel_number: "145", zone_id: "ZONE-RM-01" }, priority: "High", status: "assigned", current_milestone: "assigned" },
-  { demo: true, task_id: "SVY-2026-102", application_number: "LRMIS-2026-0002", parcel_ref: { parcel_number: "290", zone_id: "ZONE-RM-02" }, priority: "Medium", status: "visit_scheduled", current_milestone: "visit_scheduled" },
-  { demo: true, task_id: "SVY-2026-103", application_number: "LRMIS-2026-0003", parcel_ref: { parcel_number: "88", zone_id: "ZONE-RM-03" }, priority: "High", status: "survey_started", current_milestone: "survey_started" },
-];
-
 function session() {
   return {
     fullName: localStorage.getItem("full_name") || "Hassan Surveyor",
@@ -129,7 +125,7 @@ export default function Student3App() {
       <aside className="s3-sidebar">
         <div className="s3-brand"><div className="s3-logo">LR</div><div><strong>LRMIS</strong><span>Land Registration Management Information System</span></div></div>
         <nav className="s3-nav">
-          <NavGroup title="" items={[["Dashboard", "/student3/tasks"], ["My Survey Tasks", "/student3/tasks"], ["Survey Task Execution", "/student3/execution"], ["Survey Reports", "/student3/reports"], ["Surveyors", "/student3/surveyors"], ["Registrars", "/student3/registrars"], ["Coverage Zones", "/student3/map"], ["Skills & Specialization", "/student3/reports"], ["Schedules & Availability", "/student3/reports"], ["Assignments", "/student3/assignments"], ["Live Parcel Map", "/student3/map"], ["Analytics Dashboard", "/student3/analytics"], ["Registrar Review", "/student3/registrar-review"]]} />
+          <NavGroup title="" items={[["Dashboard", "/student3/tasks"], ["My Survey Tasks", "/student3/tasks"], ["Survey Task Execution", "/student3/execution"], ["Survey Reports", "/student3/reports"], ["Surveyors", "/student3/surveyors"], ["Registrars", "/student3/registrars"], ["Coverage Zones", "/student3/map"], ["Skills & Specialization", "/student3/reports"], ["Schedules & Availability", "/student3/reports"], ["Assignments", "/student3/assignments"], ["Live Parcel Map", "/student3/map"], ["Analytics Dashboard", "/student3/analytics"], ["Registrar Review", "/student3/registrar-review"], ["Management Reports", "/student3/management-reports"]]} />
         </nav>
         <div className="s3-profile"><div>BA</div><strong>{user.fullName || "Eng. Bilal Ahmad"}</strong><span>Online</span><small>ID: SUR-2025-014</small><button type="button" onClick={signOut}>Logout</button></div>
       </aside>
@@ -169,12 +165,12 @@ function Student3Kpis({ tasks, kpis }) {
   const completed = tasks.filter((task) => taskStatusGroup(task) === "Completed").length;
   const pendingReports = tasks.filter((task) => (task.current_milestone || task.status) === "survey_completed" && !task.report_uploaded).length;
   const cards = [
-    ["Assigned Tasks", assigned || tasks.length || 18, "2 new today", "blue"],
-    ["In Progress", inProgress || 7, "2 overdue", "orange"],
-    ["Completed This Month", completed || 31, "+10% vs last month", "green"],
-    ["Pending Reports", pendingReports || 4, "Need Upload", "purple"],
-    ["Surveyor Workload", "78%", "This Week", "yellow"],
-    ["Certificates Issued (May)", kpis?.certificates_issued ?? 22, "+10% vs last month", "cyan"],
+    ["Assigned Tasks", assigned, "Current assigned tasks", "blue"],
+    ["In Progress", inProgress, "Active field work", "orange"],
+    ["Completed This Month", completed, "Completed tasks", "green"],
+    ["Pending Reports", pendingReports, "Need Upload", "purple"],
+    ["Surveyor Workload", `${tasks.length}/10`, "Current workload", "yellow"],
+    ["Certificates Issued (May)", kpis?.certificates_issued ?? 0, "From MongoDB", "cyan"],
   ];
   return <div className="s3-kpis">{cards.map((card) => <article className={`s3-kpi ${card[3]}`} key={card[0]}><strong>{card[0]}</strong><i>{card[1]}</i><span>{card[2]}</span></article>)}</div>;
 }
@@ -224,7 +220,7 @@ function SurveyTasksPanel({ tasks, onRefresh, full = true, simple = false }) {
 }
 
 function SurveyTaskTable({ tasks, full = false, simple = false }) {
-  const rows = tasks.length ? tasks : fallbackSurveyTasks;
+  const rows = tasks;
   return (
     <table className="s3-table">
       <thead><tr>{!simple && <th>Task ID</th>}<th>Application ID</th><th>Parcel Number</th><th>Zone</th><th>Priority</th><th>Scheduled Visit</th><th>Current Milestone</th>{!simple && <th>Status</th>}{full && <th>Actions</th>}</tr></thead>
@@ -237,7 +233,7 @@ export function Student3ExecutionPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState([]);
-  const [previewTasks, setPreviewTasks] = useState(fallbackSurveyTasks);
+  const [previewTasks, setPreviewTasks] = useState([]);
   const [selectedId, setSelectedId] = useState(id || "");
   const [notes, setNotes] = useState("Site visit completed. Boundary measured and verified with neighboring parcels.");
   const [fileName, setFileName] = useState("survey_report.pdf");
@@ -246,7 +242,11 @@ export function Student3ExecutionPage() {
   const [reportFile, setReportFile] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const taskPool = tasks.length ? [...tasks, ...previewTasks.filter((preview) => !tasks.some((item) => (item.application_number || item.application_id) === preview.application_number))] : previewTasks;
+  const taskPool = [...tasks, ...previewTasks].filter((item) =>
+    ["assigned", "visit_scheduled", "arrived_on_site", "survey_started", "survey_completed"].includes(
+      normalizeMilestone(item.current_milestone || item.status),
+    ),
+  );
   const task = taskPool.find((item) => (item.application_number || item.application_id) === selectedId) || (!selectedId ? taskPool[0] : null);
   const realTask = isRealSurveyTask(task);
 
@@ -1087,6 +1087,85 @@ export function Student3RegistrarReviewPage() {
           <div><button className="approve" type="button" onClick={() => submit("approve")}>Approve</button><button className="reject" type="button" onClick={() => submit("reject")}>Reject</button></div>
         </article>
       </div> : <div className="s3-no-data">No survey reports are available for registrar review.</div>}
+    </section>
+  </div>;
+}
+
+const managementReportTypes = [
+  ["applications_summary", "Applications Summary", "Summary of applications by status, type and zone.", "blue"],
+  ["surveyor_performance", "Surveyor Performance", "Workload and completed survey tasks by surveyor.", "green"],
+  ["registrar_performance", "Registrar Performance", "Reviewed, approved and rejected applications.", "orange"],
+  ["hotspot_zones", "Hotspot Zones", "Zones with the most applications and objections.", "purple"],
+];
+
+export function Student3ManagementReportsPage() {
+  const initial = { report_type: "applications_summary", date_from: "2024-04-01", date_to: "2024-04-30", zone: "all", format: "pdf" };
+  const [form, setForm] = useState(initial);
+  const [reports, setReports] = useState([]);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      setReports(itemsOf(await getManagementReports()));
+      setError("");
+    } catch (err) {
+      setError(backendMessage(err));
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  function reportCsv(report) {
+    const rows = report.rows || [];
+    const keys = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => key !== "_id")))];
+    const table = [["group", ...keys], ...rows.map((row) => [typeof row._id === "object" ? Object.values(row._id).join(" / ") : row._id, ...keys.map((key) => row[key] ?? "")])];
+    const blob = new Blob([table.map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${report.report_type}-${report.date_from}-${report.date_to}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function reportPdf(report) {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+    const rows = report.rows || [];
+    const keys = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => key !== "_id")))];
+    printWindow.document.write(`<html><head><title>${report.report_name}</title><style>body{font-family:Arial;padding:32px;color:#14233f}h1{color:#402099}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{border:1px solid #dce3ee;padding:9px;text-align:left}th{background:#f0edff}.meta{color:#66758d}</style></head><body><h1>LRMIS - ${report.report_name}</h1><p class="meta">${report.date_from} to ${report.date_to} | Zone: ${report.zone} | Generated: ${new Date(report.created_at).toLocaleString()}</p><table><thead><tr><th>Group</th>${keys.map((key) => `<th>${readableMilestone(key)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr><td>${typeof row._id === "object" ? Object.values(row._id).join(" / ") : row._id || "-"}</td>${keys.map((key) => `<td>${row[key] ?? ""}</td>`).join("")}</tr>`).join("")}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`);
+    printWindow.document.close();
+  }
+
+  function download(report) {
+    if ((report.format || "").toLowerCase() === "csv") reportCsv(report);
+    else reportPdf(report);
+  }
+
+  async function generate(overrides = {}) {
+    const payload = { ...form, ...overrides };
+    try {
+      const report = await generateManagementReport(payload);
+      setMessage(`${report.report_name} generated successfully.`);
+      setError("");
+      await load();
+      download(report);
+    } catch (err) {
+      setError(backendMessage(err));
+    }
+  }
+
+  return <div className="s3-stack">
+    <section className="s3-card s3-management-reports">
+      <header><b>3.</b><h1>Reports</h1></header>
+      {message && <div className="s3-success">{message}</div>}
+      {error && <div className="s3-error">{error}</div>}
+      <div className="s3-report-builder">
+        <aside><h2>Generate Management Reports</h2><label>Report Type<select value={form.report_type} onChange={(event) => setForm({ ...form, report_type: event.target.value })}>{managementReportTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Date Range<div><input type="date" value={form.date_from} onChange={(event) => setForm({ ...form, date_from: event.target.value })} /><span>-</span><input type="date" value={form.date_to} onChange={(event) => setForm({ ...form, date_to: event.target.value })} /></div></label><label>Zone<select value={form.zone} onChange={(event) => setForm({ ...form, zone: event.target.value })}><option value="all">All Zones</option><option>ZONE-RM-01</option><option>ZONE-RM-02</option><option>ZONE-RM-03</option></select></label><label>Format<select value={form.format} onChange={(event) => setForm({ ...form, format: event.target.value })}><option value="pdf">PDF</option><option value="csv">CSV</option></select></label><div className="s3-report-form-actions"><button onClick={() => generate()}>Generate Report</button><button className="reset" onClick={() => setForm(initial)}>Reset</button></div></aside>
+        <main><h2>Report Previews</h2><div className="s3-report-previews">{managementReportTypes.map(([value, label, description, tone]) => <article className={tone} key={value}><i>▤</i><h3>{label}</h3><p>{description}</p><div><button onClick={() => generate({ report_type: value, format: "pdf" })}>PDF</button><button onClick={() => generate({ report_type: value, format: "csv" })}>CSV</button></div></article>)}</div>
+          <h2>Recent Generated Reports</h2><div className="s3-table-scroll"><table className="s3-table s3-generated-table"><thead><tr><th>Report Name</th><th>Type</th><th>Date Generated</th><th>Format</th><th>Action</th></tr></thead><tbody>{reports.map((report) => <tr key={report._id}><td>{report.report_name}</td><td>{report.category}</td><td>{new Date(report.created_at).toLocaleString()}</td><td>{report.format}</td><td><button onClick={() => download(report)}>Download</button></td></tr>)}</tbody></table></div>
+        </main>
+      </div>
     </section>
   </div>;
 }

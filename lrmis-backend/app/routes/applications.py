@@ -6,6 +6,8 @@ import uuid
 router = APIRouter()
 
 collection = db["land_applications"]
+survey_tasks = db["survey_tasks"]
+surveyors = db["staff_members"]
 
 # 🧠 Workflow (أساسي جداً)
 WORKFLOW = {
@@ -100,5 +102,45 @@ def move(id: str, new_status: str):
             }
         }
     )
+
+    if new_status == "survey_required":
+        existing = survey_tasks.find_one({"application_id": id})
+        if not existing:
+            surveyor = surveyors.find_one(
+                {"role": "surveyor", "$or": [{"status": "available"}, {"active": True}]},
+                sort=[("workload.active_tasks", 1), ("workload", 1)],
+            )
+            if not surveyor:
+                raise HTTPException(400, "No available surveyor found")
+            task_number = survey_tasks.count_documents({}) + 1
+            parcel = app.get("parcel_ref") or app.get("parcel") or {}
+            task = {
+                "task_id": f"SURV-2026-{task_number:04d}",
+                "application_id": id,
+                "application_number": id,
+                "parcel_id": parcel.get("parcel_id"),
+                "parcel_ref": {
+                    "parcel_number": parcel.get("parcel_number"),
+                    "zone_id": parcel.get("zone_id") or parcel.get("zone"),
+                },
+                "parcel_number": parcel.get("parcel_number"),
+                "zone_id": parcel.get("zone_id") or parcel.get("zone"),
+                "assigned_surveyor": str(surveyor["_id"]),
+                "assigned_surveyor_id": str(surveyor["_id"]),
+                "surveyor_id": surveyor.get("staff_code"),
+                "status": "assigned",
+                "current_milestone": "assigned",
+                "milestone": "assigned",
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            result = survey_tasks.insert_one(task)
+            collection.update_one(
+                {"application_id": id},
+                {"$set": {
+                    "assignment.assigned_surveyor": str(surveyor["_id"]),
+                    "assignment.survey_task_id": str(result.inserted_id),
+                }},
+            )
 
     return {"message": "status updated"}
